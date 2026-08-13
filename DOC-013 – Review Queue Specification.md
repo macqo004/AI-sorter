@@ -1,315 +1,242 @@
-# DOC-011 – Logging Standard
+# DOC-013 – Review Queue Specification
 
 ## 1. Purpose
 
-This document defines the logging standard used by all project modules.
+This document defines the Review Queue mechanism used throughout the project.
 
-The primary objectives of the logging system are:
+The Review Queue is a centralized system for collecting operations that require user verification before execution or classification.
 
-* provide understandable diagnostic information;
-* allow users to identify problems without reading source code;
-* simplify troubleshooting;
-* provide execution statistics;
-* create a chronological history of module activity.
+The purpose of the Review Queue is to ensure that no module performs uncertain or potentially destructive operations automatically.
 
-Logs are intended primarily for **human users**, while remaining suitable for automated analysis if required.
+The Review Queue is intended to assist the user, not replace user decisions.
 
 ---
 
-# 2. General Principles
+# 2. Design Philosophy
 
-Every module shall generate logs according to the same rules.
+The project follows the principle:
 
-Logging must be:
+> **The system shall never guess when confidence is insufficient.**
 
-* consistent;
-* readable;
-* deterministic;
-* lightweight;
-* independent of individual module implementation.
+Whenever a module cannot make a decision with sufficiently high confidence, it shall:
 
-Every module shall use the common logging framework defined by this document.
+* skip the operation;
+* create a Review Queue entry;
+* continue processing remaining files.
 
----
-
-# 3. Readability
-
-Logs **must not** contain cryptic messages, internal error codes or implementation-specific information unless absolutely necessary.
-
-Preferred:
-
-> Scanner
-> Unable to calculate SHA512.
-> File: D:\TODO\furina.jpg
-> Reason: Access denied.
-> Suggested action: Close the application using the file and run Scanner again.
-
-Avoid:
-
-> Error 0x82
-
-or
-
-> NullReferenceException in Scanner.cs line 472
-
-Internal exception details may optionally be written to a separate debug log but shall never replace the user-readable message.
+The existence of Review Queue entries shall never stop module execution unless explicitly configured by the user.
 
 ---
 
-# 4. Human-Oriented Logging
+# 3. Scope
 
-Every important log entry should answer four questions whenever possible:
+The Review Queue may be used by any module.
 
-1. What happened?
-2. Which file or object was affected?
-3. Why did it happen? (if known)
-4. What can the user do next?
+Examples include:
 
-Example:
-
-Scanner
-
-Image could not be processed.
-
-File:
-D:\TODO\furina.jpg
-
-Reason:
-File is currently locked by another application.
-
-Suggested action:
-Close the application and run Scanner again.
-
----
-
-# 5. Log Levels
-
-The following log levels shall be used throughout the project.
-
-## INFO
-
-Normal operation.
-
-Examples:
-
-* module started;
-* module finished;
-* configuration loaded;
-* database connected.
-
----
-
-## WARNING
-
-Unexpected but recoverable situations.
-
-Examples:
-
-* image skipped;
-* confidence below threshold;
-* missing optional metadata;
-* file already exists.
-
----
-
-## ERROR
-
-Operation failed.
-
-Examples:
-
-* SHA512 calculation failed;
-* database write failed;
-* image unreadable.
-
----
-
-## FATAL
-
-Critical error preventing further execution.
-
-Examples:
-
-* database unavailable;
-* configuration corrupted;
-* storage unavailable.
-
----
-
-## DEBUG (optional)
-
-Additional developer diagnostics.
-
-Disabled by default.
-
----
-
-# 6. Log Categories
-
-Every log entry shall identify its originating module.
-
-Examples:
-
-* Scanner
-* Renamer
-* Database
+* File Renamer
 * Universe Analysis
 * Character Analysis
 * Theme Analysis
-* AutoSort
+* Collection Consistency Checker
 * Migration Queue
-* Collection Definition Wizard
-* Configuration Manager
-* System
+* future modules
+
+Modules are encouraged to use the Review Queue instead of making assumptions.
 
 ---
 
-# 7. Log Format
+# 4. Review Queue Entry
 
-Each entry should contain, where applicable:
+Each Review Queue entry shall contain enough information for the user to understand why the operation was not performed.
 
-* timestamp;
+Minimum information:
+
+* unique review identifier;
 * module name;
-* log level;
-* message;
-* file_id (if available);
+* date and time;
+* affected file_id (if available);
 * SHA512 (if available);
-* current file path (if available).
-
-Example:
-
-2026-07-22 10:41:15
-
-Scanner
-
-INFO
-
-Calculated SHA512 successfully.
-
-File ID:
-14582
-
-SHA512:
-...
-
-Path:
-AI\TODO\furina.jpg
+* current file path;
+* operation type;
+* reason for review;
+* suggested action;
+* confidence level (if applicable).
 
 ---
 
-# 8. Success Logging
-
-Logs shall record not only failures but also successful execution of important operations.
-
 Example:
 
-Universe Analysis
+```text
+Review ID:
+RQ-000001
 
-Finished successfully.
+Module:
+File Renamer
 
-Processed:
-18,452 images
+File:
+AI/Games/Genshin/Furina/furina (copy).jpg
 
-Recognized:
-17,981
-
-Below confidence threshold:
-471
-
-Execution time:
-00:03:12
-
----
-
-# 9. Error Reporting
-
-Whenever possible, errors should include a suggested corrective action.
-
-Example:
-
-Database
-
-Unable to write record.
+Operation:
+Filename normalization
 
 Reason:
-Database file is read-only.
+Filename matches multiple rename rules.
 
 Suggested action:
-Verify file permissions.
+Review manually.
+
+Confidence:
+Low
+```
 
 ---
 
-# 10. Reports vs Logs
+# 5. Review Categories
 
-Reports and logs serve different purposes.
+Every Review Queue entry shall belong to a category.
 
-Logs are intended for diagnostics.
+Recommended categories:
 
-Reports are intended for presenting processing results to the user.
+* Filename Review
+* Classification Review
+* Migration Review
+* Database Review
+* Duplicate Review
+* Manual Verification
+* Other
 
-Examples of reports:
-
-* Migration Queue;
-* Theme Summary;
-* Universe Statistics;
-* Duplicate Report.
-
-Reports shall not replace logging.
-
----
-
-# 11. Performance
-
-Logging shall not significantly reduce processing performance.
-
-Recommended implementation:
-
-* buffered writes;
-* asynchronous logging;
-* periodic flushing.
-
-Logging must never become the primary performance bottleneck.
+Additional categories may be added in future versions.
 
 ---
 
-# 12. Log Rotation
+# 6. Confidence Levels
 
-Log files should be automatically rotated.
+Modules that perform automatic recognition should include confidence information whenever possible.
 
-Recommended strategy:
+Recommended values:
 
-* create a new log file for each module execution;
-* optionally archive older logs;
-* allow automatic cleanup according to user configuration.
+* High
+* Medium
+* Low
 
----
-
-# 13. Failure to Write Logs
-
-Failure to save a log shall never terminate module execution unless logging is explicitly required for system integrity.
-
-If log writing fails:
-
-* module continues whenever possible;
-* warning is displayed;
-* failure is recorded in memory if feasible.
+Modules that do not calculate confidence (for example File Renamer) may leave this field empty.
 
 ---
 
-# 14. Consistency
+# 7. Suggested Action
 
-All project modules shall follow this standard.
+Modules may provide a suggested action.
 
-Individual modules may extend logging with additional information but shall not violate the formatting and readability rules defined in this document.
+Examples:
+
+```text
+Rename to:
+
+furina.jpg
+```
+
+or
+
+```text
+Suggested universe:
+
+Genshin Impact
+```
+
+or
+
+```text
+Suggested destination:
+
+Anime/Games/Genshin Impact/Furina
+```
+
+Suggestions shall never be executed automatically.
 
 ---
 
-# 15. Design Philosophy
+# 8. User Decisions
 
-The logging system follows the principle:
+The Review Queue itself does not modify the collection.
 
-> Logs should explain what happened, not merely report that something happened.
+User decisions are external to this document.
 
-A user with basic computer knowledge should be able to understand the majority of log entries without consulting technical documentation or source code.
+Future versions of the project may implement interfaces allowing the user to:
 
-Logs should assist troubleshooting rather than create additional uncertainty.
+* approve;
+* reject;
+* postpone;
+* ignore;
+
+individual Review Queue entries.
+
+---
+
+# 9. Storage Format
+
+The Review Queue shall be exportable.
+
+Recommended export formats:
+
+* CSV
+* JSON
+
+CSV is recommended for manual inspection using spreadsheet software.
+
+JSON is recommended for future integration with project tools.
+
+---
+
+# 10. Lifetime
+
+Review Queue entries remain valid until one of the following occurs:
+
+* the user resolves the issue;
+* the affected file is removed;
+* the associated database record no longer exists;
+* the Review Queue is manually cleared.
+
+The system shall never remove Review Queue entries automatically.
+
+---
+
+# 11. Logging
+
+Creation of Review Queue entries shall also be recorded in the project log according to DOC-011.
+
+The log should contain:
+
+* module;
+* file identifier;
+* review identifier;
+* reason.
+
+The log shall not duplicate the full Review Queue contents.
+
+---
+
+# 12. Safety Principles
+
+The Review Queue exists to protect the collection from incorrect automatic decisions.
+
+Modules shall prefer creating a Review Queue entry over performing uncertain operations.
+
+No module shall modify files, classifications or database records solely because a possible solution exists.
+
+Only deterministic operations or explicit user approval may change collection data.
+
+---
+
+# 13. Future Extensions
+
+Future project versions may extend the Review Queue with features such as:
+
+* graphical review interface;
+* batch approval;
+* filtering and searching;
+* module-specific review panels;
+* automatic reopening of unresolved entries;
+* integration with future workflow management tools.
+
+These extensions shall remain compatible with the principles defined in this document.
