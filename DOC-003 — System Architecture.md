@@ -1,6 +1,6 @@
-# DOC-002
+# DOC-003
 
-# Database Architecture Specification
+# System Architecture
 
 **Project:** AI Image Sorter
 
@@ -8,388 +8,369 @@
 
 **Status:** Draft
 
-**Depends on:** DOC-001 Project Specification
+**Depends on:**
+
+DOC-001
+
+DOC-002
 
 ---
 
 # 1. Purpose
 
-This document defines the architecture of the project database.
+This document defines the architecture of the entire application.
 
-The database is the central component of the application.
+It describes how independent modules cooperate.
 
-Every module reads information from the database and stores its own results inside it.
-
-The database is considered the **single source of truth**.
-
-Directory structure is treated only as the physical location of files.
+It does not describe implementation details.
 
 ---
 
-# 2. Design Goals
+# 2. Architectural Philosophy
 
-The database must satisfy the following requirements:
+The application follows a strict modular architecture.
 
-* fully offline
-* lightweight
-* portable
-* resilient against crashes
-* capable of handling millions of images
-* easy to backup
-* independent of operating system
+Every module must have exactly one responsibility.
 
-The database should remain usable for many years without requiring structural redesign.
+Modules communicate only through:
 
----
+* SQLite database
+* filesystem
 
-# 3. Database Engine
-
-SQLite has been selected for the first implementation.
-
-Reasons:
-
-* zero configuration
-* single file
-* no server required
-* excellent Python support
-* ACID transactions
-* fast enough for millions of records
-* perfect for offline applications
-
-Future migration to another SQL engine should remain possible without redesigning application logic.
+Direct module-to-module communication is forbidden.
 
 ---
 
-# 4. Fundamental Design Principles
+# 3. Core Principles
 
-## 4.1 Source of Truth
+## Single Responsibility Principle
 
-The database always contains the authoritative state.
-
-Folders never define application logic.
-
-Modules must never rely exclusively on directory names.
-
----
-
-## 4.2 Immutable Image Identity
-
-Every image receives a permanent internal identifier.
-
-The identifier never changes.
-
-File name changes do not create a new image.
-
-Folder changes do not create a new image.
-
-Only deletion removes an image from active use.
-
----
-
-## 4.3 SHA-512
-
-SHA-512 is the primary technical identifier.
-
-It is used to:
-
-* recognize files
-* detect moved files
-* detect renamed files
-* connect AI history
-* detect manual corrections
-
-Filename is never treated as identity.
-
----
-
-## 4.4 Separation of Responsibilities
-
-The database stores facts.
-
-Modules perform analysis.
-
-No module owns the database.
-
-Every module only updates fields belonging to its own responsibility.
+Every module performs exactly one task.
 
 Example:
-
-Scanner:
-
-* creates image record
-* updates file metadata
-
-B&W Filter:
-
-* updates monochrome classification
-
-Screenshot Filter:
-
-* updates screenshot classification
-
-Mover:
-
-* updates file location
-
-Rename:
-
-* updates filename
-
-No module modifies another module's results.
-
----
-
-# 5. Database Layers
-
-The database is logically divided into several layers.
-
-Layer 1
-
-Image identity
-
-Layer 2
-
-Filesystem information
-
-Layer 3
-
-Analysis results
-
-Layer 4
-
-AI classification
-
-Layer 5
-
-User feedback
-
-Layer 6
-
-History
-
-This separation keeps modules independent.
-
----
-
-# 6. Logical Data Flow
 
 Scanner
 
 ↓
 
-Image Identity
+build database
 
-↓
-
-Filesystem Metadata
-
-↓
-
-Filter Results
-
-↓
-
-AI Results
-
-↓
-
-User Review
-
-↓
-
-History
-
-Every module appends information.
-
-Earlier results are preserved whenever possible.
+Nothing else.
 
 ---
 
-# 7. Image Lifecycle
+## Independent Execution
 
-An image enters the system once.
-
-Scanner creates its database record.
-
-The image keeps the same internal identity throughout its entire lifetime.
-
-Possible events:
-
-* scanned
-* analyzed
-* classified
-* moved
-* renamed
-* accepted
-* rejected
-* deleted
-
-These are events.
-
-They are not different images.
-
----
-
-# 8. Directory Philosophy
-
-Directories are user interface.
-
-Database is application interface.
-
-This distinction is fundamental.
-
-Changing a directory should never require rebuilding the database.
-
----
-
-# 9. TODO Tree
-
-Only images located inside the TODO tree are eligible for automatic classification.
-
-Modules performing active classification may process only TODO images.
-
----
-
-# 10. AI Tree
-
-Images inside the AI tree are considered waiting for user verification.
-
-Modules do not classify these images again.
-
-The system only monitors:
-
-* location
-* filename
-* existence
-
----
-
-# 11. FINAL Tree
-
-The FINAL tree represents the user's confirmed library.
-
-Files inside FINAL are never automatically reclassified.
-
-The database may only observe:
-
-* movement
-* rename
-* deletion
-
----
-
-# 12. User Feedback
-
-User actions are treated as valuable information.
-
-Examples:
-
-Accepted prediction
-
-Wrong character
-
-Wrong universe
-
-Wrong category
-
-Returned to TODO
-
-Moved elsewhere
-
-Deleted
-
-Every action may later improve AI behaviour.
-
----
-
-# 13. History
-
-The database never assumes why something happened.
-
-Instead it records observable facts.
+Every module can be executed independently.
 
 Example:
 
-Image moved
+Scanner
 
-Old path
+today
+
+B&W
+
+tomorrow
+
+IRL
+
+next week
+
+Modules never require simultaneous execution.
+
+---
+
+## Stateless Modules
+
+Modules do not store internal project state.
+
+Persistent state belongs exclusively to the database.
+
+---
+
+## Append-Only Knowledge
+
+Modules should append information.
+
+They should not overwrite unrelated data.
+
+---
+
+# 4. High Level Architecture
+
+Scanner
 
 ↓
 
-New path
+Database
 
-Timestamp
+↓
 
-No assumptions are made.
+Filter Modules
 
-Interpretation belongs to higher-level modules.
+↓
 
----
+AI Modules
 
-# 14. Performance Goals
+↓
 
-Initial target:
+Feedback
 
-5 million images
+↓
 
-Future target:
+Mover
 
-20 million images
+↓
 
-The schema should remain unchanged.
+Rename
 
-Only indexes may require optimization.
-
----
-
-# 15. Backup Strategy
-
-SQLite database is backed up independently from image files.
-
-The database must always be recoverable without rescanning the entire collection.
-
-Periodic backups should be supported by future maintenance tools.
+Every component communicates through the database.
 
 ---
 
-# 16. Future Expansion
+# 5. Processing Pipeline
 
-The database architecture reserves space for future modules.
+The processing pipeline consists of independent stages.
+
+Stage 1
+
+Scanner
+
+Stage 2
+
+Simple Filters
+
+Stage 3
+
+AI Classification
+
+Stage 4
+
+User Review
+
+Stage 5
+
+Learning
+
+Stage 6
+
+Maintenance
+
+Each stage may be stopped independently.
+
+---
+
+# 6. Scanner Layer
+
+Responsibilities:
+
+* discover files
+* identify files
+* update database
+
+Scanner never performs image analysis.
+
+---
+
+# 7. Filter Layer
 
 Examples:
 
-OCR
+B&W
 
-Wallpaper detection
+Screenshot
 
-Pose detection
+Meme
 
-Outfit detection
+IRL
 
-Similarity search
+Responsibilities:
 
-Character recognition
+Analyze images.
 
-Universe recognition
+Store classification.
 
-No redesign should be required when new analysis modules appear.
+Never move files.
 
 ---
 
-# 17. Next Document
+# 8. AI Layer
 
-DOC-003
+Examples:
 
-Database Schema
+Universe detection
 
-The next document defines:
+Character detection
 
-* tables
-* columns
-* indexes
-* constraints
-* relations
+Theme detection
 
-This document intentionally contains no SQL implementation.
+Responsibilities:
 
-It defines architecture only.
+Predict.
+
+Never rename.
+
+Never move.
+
+Never delete.
+
+---
+
+# 9. Feedback Layer
+
+Observes user actions.
+
+Produces training information.
+
+Never performs classification.
+
+---
+
+# 10. File Operation Layer
+
+Contains modules:
+
+Mover
+
+Rename
+
+Archive
+
+Responsibilities:
+
+Modify filesystem.
+
+Never perform AI.
+
+---
+
+# 11. Maintenance Layer
+
+Examples:
+
+Database cleanup
+
+Integrity verification
+
+Backup
+
+Statistics
+
+These modules never classify images.
+
+---
+
+# 12. Filesystem Philosophy
+
+Filesystem is passive.
+
+Database is active.
+
+The application always reasons using database information.
+
+Filesystem only reflects current physical storage.
+
+---
+
+# 13. TODO Tree
+
+The TODO tree is the only source of new work.
+
+Only files located here are eligible for active processing.
+
+---
+
+# 14. AI Tree
+
+AI tree represents pending review.
+
+No module should actively classify images located here.
+
+Only monitoring is allowed.
+
+---
+
+# 15. FINAL Tree
+
+FINAL represents confirmed user decisions.
+
+Modules must treat FINAL as read-only.
+
+---
+
+# 16. Event Driven Behaviour
+
+Modules react to events.
+
+Examples:
+
+New file
+
+Moved file
+
+Renamed file
+
+Deleted file
+
+Accepted classification
+
+Rejected classification
+
+Events update database state.
+
+---
+
+# 17. Failure Isolation
+
+Module failure must never stop the entire application.
+
+Example:
+
+Meme filter crashes.
+
+Scanner continues working.
+
+B&W continues working.
+
+Only Meme becomes unavailable.
+
+---
+
+# 18. Configuration
+
+Every module has its own configuration.
+
+Modules never modify another module's configuration.
+
+---
+
+# 19. Logging
+
+Every module produces its own log.
+
+Logs are independent.
+
+Central log aggregation may be added later.
+
+---
+
+# 20. Future Compatibility
+
+The architecture is designed for future expansion.
+
+Adding a new module must never require redesign of existing modules.
+
+New modules should only:
+
+Read database.
+
+Analyze data.
+
+Write results.
+
+No architectural modifications should be necessary.
+
+---
+
+End of DOC-003
