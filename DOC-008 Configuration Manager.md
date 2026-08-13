@@ -1,215 +1,312 @@
-DOC-007
-Module Architecture
+# DOC-008
 
-Project: AI Image Collection Management System
+# Configuration Manager
 
-Document: DOC-007
+**Project:** AI Image Collection Management System
 
-Version: 1.0
+**Document:** DOC-008
 
-Status: Approved
+**Version:** 1.0
 
-1. Purpose
+**Status:** Design Specification
 
-This document defines the architectural principles shared by every module in the project.
+---
 
-It specifies how modules interact with the rest of the system and establishes the design rules that all current and future modules must follow.
+# 1. Purpose
 
-2. Design Philosophy
+Configuration Manager provides a central location for all user-configurable settings used by the project.
 
-The project is based on independent modules.
+Its purpose is to eliminate hardcoded values from modules while allowing the user to customise the system without modifying source code.
 
-Each module performs one clearly defined task.
+Configuration Manager stores only application settings.
 
-Modules never communicate directly with one another.
+It never stores image metadata or analysis results.
 
-The database is the only shared communication layer.
+---
 
-3. Module Independence
+# 2. Design Philosophy
 
-Every module shall:
+Configuration is shared across the entire project.
 
-run independently;
-be executable without starting other modules;
-perform only its own task;
-terminate after completing its work.
+Modules should read their configuration from Configuration Manager instead of maintaining separate configuration files whenever practical.
 
-Modules are not permanently resident in memory.
+The goal is to provide one consistent source of settings.
 
-4. User-Controlled Execution
+---
 
-Modules are started exclusively by the user.
+# 3. Responsibilities
 
-The project contains:
+Configuration Manager is responsible for:
 
-no scheduler;
-no automatic execution engine;
-no workflow manager.
+* loading configuration;
+* validating configuration;
+* saving configuration;
+* providing configuration values to modules;
+* restoring default values.
 
-The user decides:
+---
 
-which module to run;
-when to run it;
-how often to run it.
-5. Execution Order
+# 4. Configuration Categories
 
-Modules may be executed in any order.
+Configuration is divided into logical groups.
 
-Some modules naturally produce more useful results when previous modules have already populated the database.
+Examples:
 
-Example:
+General
 
 Scanner
 
-↓
+Analysis Modules
+
+AutoSort
+
+Collection Definition
+
+Maintenance Modules
+
+Database
+
+Logging
+
+User Interface
+
+Future modules may introduce additional categories.
+
+---
+
+# 5. General Configuration
+
+Examples:
+
+* application language;
+* default working directories;
+* logging level;
+* temporary directory;
+* automatic backup options.
+
+---
+
+# 6. Scanner Configuration
+
+Examples:
+
+* maximum worker threads;
+* supported file extensions;
+* recursive scan options;
+* SHA512 behaviour;
+* logging verbosity.
+
+---
+
+# 7. Analysis Module Configuration
+
+Each analysis module may expose its own settings.
+
+Examples:
 
 Universe Analysis
 
-↓
+* confidence threshold
 
 Character Analysis
 
-However, the system never enforces this sequence.
+* confidence threshold
 
-6. Shared Database
+Theme Analysis
 
-Modules exchange information exclusively through the project database.
+* confidence threshold
 
-Modules never:
-
-call other modules;
-exchange files;
-communicate through memory;
-communicate through sockets.
-
-All persistent information is stored in the database.
-
-7. Reading Existing Data
-
-Before performing work, a module should use existing database information whenever possible.
-
-Example:
-
-Scanner:
-
-checks stored file metadata;
-reuses existing SHA512 values when valid.
-
-Universe Analysis:
-
-reads image information already stored by Scanner.
-
-Character Analysis:
-
-reads Universe observations from the database.
-8. Writing Results
-
-Each module is responsible only for writing its own observations.
-
-A module shall never overwrite data owned by another module unless explicitly designed to update its own previous results.
-
-9. Repeated Execution
-
-Modules may be executed repeatedly.
-
-The system does not prevent repeated execution.
-
-Whether a module should be executed again is entirely the user's decision.
-
-10. Parallel Execution
-
-The project assumes a single user operating the application.
-
-Simultaneous execution protection is not required.
-
-Future versions may introduce optional safeguards if necessary.
-
-11. User Feedback
-
-Every module should provide visible execution status.
-
-Minimum requirements:
-
-starting indication;
-running indication;
-completion indication;
-error indication.
-
-A progress bar is recommended when measurable progress is available.
-
-Otherwise, an activity indicator (spinner) is sufficient.
-
-The purpose is to assure the user that the module has started successfully.
-
-12. Error Handling
-
-Failure of one module must not prevent execution of any other module.
-
-Modules are isolated.
-
-Errors are logged.
-
-Successfully completed work is preserved.
-
-13. Extensibility
-
-Adding a new module should require:
-
-implementing the module itself;
-registering its configuration;
-defining its database fields if required.
-
-Existing modules should not require modification.
-
-14. Module Categories
-
-Modules currently belong to three groups.
-
-Infrastructure
-
-Examples:
-
-Scanner
-Collection Definition Wizard
-AutoSort
-Analysis
-
-Examples:
-
-B&W
-Screenshot
-Meme
-IRL
-Universe
-Character
-Theme
 Set Filter
-Maintenance
+
+* similarity threshold
+
+B&W Analysis
+
+* monochrome tolerance
+
+The Configuration Manager does not interpret these values.
+
+It only stores and provides them.
+
+---
+
+# 8. Collection Definition Configuration
+
+Examples:
+
+* Collection Tree locations;
+* Classification Boundary options;
+* update behaviour.
+
+---
+
+# 9. AutoSort Configuration
+
+Examples:
+
+* AI workspace location;
+* directory creation behaviour;
+* reporting options.
+
+AutoSort configuration never contains FINAL paths generated automatically.
+
+Those are provided by Collection Definition.
+
+---
+
+# 10. Maintenance Configuration
 
 Examples:
 
 Collection Consistency Checker
 
-Additional categories may be introduced in future versions.
+* migration confidence thresholds;
+* report output directory;
+* export format;
+* CSV delimiter.
 
-15. Design Principles
+---
 
-Every module should:
+# 11. Database Configuration
 
-perform one task only;
-remain independent;
-communicate only through the database;
-be started manually by the user;
-produce reproducible results;
-log its activity;
-avoid modifying data outside its responsibility.
-16. Acceptance Criteria
+Examples:
 
-The module architecture is considered correctly implemented when:
+* database location;
+* connection parameters;
+* backup settings;
+* cache behaviour.
 
-every module runs independently;
-no module depends on another process being active;
-all communication occurs through the database;
-the user controls execution;
-new modules can be added without redesigning the existing architecture.
-End of DOC-007
+Sensitive information should be protected appropriately.
+
+---
+
+# 12. Logging Configuration
+
+Examples:
+
+* log directory;
+* maximum log size;
+* log retention period;
+* verbosity level.
+
+---
+
+# 13. User Interface Configuration
+
+Examples:
+
+* theme;
+* language;
+* window layout;
+* progress display;
+* default export locations.
+
+---
+
+# 14. Configuration Storage
+
+The physical storage format is intentionally unspecified.
+
+Possible implementations include:
+
+* JSON
+* SQLite
+* XML
+* YAML
+
+The storage mechanism may change without affecting module behaviour.
+
+---
+
+# 15. Validation
+
+Configuration Manager validates configuration before it becomes active.
+
+Examples:
+
+* missing directories;
+* invalid numeric ranges;
+* duplicate Collection Trees;
+* unsupported values.
+
+Invalid configuration should never crash the application.
+
+---
+
+# 16. Default Values
+
+Every configurable option shall define a default value.
+
+The system must remain usable immediately after installation.
+
+---
+
+# 17. Import and Export
+
+Configuration should support:
+
+* export;
+* import;
+* backup;
+* restore.
+
+This allows migration between installations.
+
+---
+
+# 18. Module Registration
+
+Each module registers its configurable parameters with Configuration Manager.
+
+Configuration Manager itself does not require knowledge of module internals.
+
+This allows future modules to be added without redesigning the configuration system.
+
+---
+
+# 19. Separation of Responsibilities
+
+Configuration Manager stores:
+
+* application settings;
+* module settings;
+* user preferences.
+
+Configuration Manager does **not** store:
+
+* image metadata;
+* analysis observations;
+* Collection Definition;
+* migration suggestions;
+* SHA512 values;
+* image tags.
+
+Those belong to the project database.
+
+---
+
+# 20. Design Principles
+
+Configuration Manager:
+
+* provides one central configuration source;
+* remains independent of analysis modules;
+* validates user input;
+* supports future expansion;
+* separates configuration from operational data.
+
+---
+
+# 21. Acceptance Criteria
+
+Configuration Manager is considered complete when:
+
+* modules obtain configuration from a common source;
+* configuration can be validated;
+* default values exist for every option;
+* configuration can be exported and imported;
+* operational image data remains stored exclusively in the project database.
+
+---
+
+# End of DOC-008
