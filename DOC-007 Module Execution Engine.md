@@ -6,7 +6,7 @@
 
 **Document:** DOC-007
 
-**Version:** 2.0
+**Version:** 2.1
 
 **Status:** Draft
 
@@ -17,6 +17,7 @@ DOC-005
 DOC-008
 DOC-010
 DOC-011
+DOC-012
 
 ---
 
@@ -56,15 +57,33 @@ A module must not become responsible for another module's function merely becaus
 
 ---
 
-# 3. Module Independence
+# 3. Module Independence and Communication
 
 Each module should be independently executable.
 
 A module should not require another module process to remain running while it performs its work.
 
-Modules communicate persistent information through the shared database and through the interfaces defined by the project architecture.
+**Modules do not communicate directly with other modules.**
 
-A module may use operating-system facilities, libraries and other technical dependencies required to perform its own task. The rule against direct module-to-module communication is intended to prevent hidden application-level coupling, not to prohibit ordinary operating-system functionality.
+When one module produces information intended for another module, that information is persisted in the shared database. The receiving module reads the required information from the database when it runs.
+
+The intended communication model is therefore:
+
+```text
+Module A
+    ↓
+Database
+    ↓
+Module B
+```
+
+and not:
+
+```text
+Module A ─────→ Module B
+```
+
+This restriction concerns application-level communication between project modules. It does not prevent a module from using normal operating-system facilities, libraries, filesystem access, GPU resources or other technical resources required for its own operation.
 
 Modules normally terminate after completing the requested operation. The architecture does not require permanently resident module processes.
 
@@ -115,9 +134,9 @@ Dependencies should therefore be expressed as **data requirements**, not as a re
 
 # 6. Shared Database
 
-The project database is the primary shared persistence and communication layer between modules.
+The project database is the primary shared persistence and inter-module communication layer.
 
-Modules should exchange analysis and processing state through the database rather than through ad-hoc temporary files or direct calls between module implementations.
+Modules exchange persistent analysis, classification and processing state through the database rather than through direct calls between module implementations or ad-hoc temporary files.
 
 The database contains information such as:
 
@@ -498,7 +517,8 @@ The module architecture is considered correctly implemented when:
 * modules can be executed independently;
 * the user controls execution under the current architecture;
 * modules do not require another module process to remain active;
-* persistent inter-module information is exchanged through documented shared state;
+* modules do not communicate directly with other modules;
+* persistent inter-module information is exchanged through the shared database;
 * execution state is visible to the user;
 * executions are recorded appropriately;
 * failures do not unnecessarily invalidate unrelated completed work;
