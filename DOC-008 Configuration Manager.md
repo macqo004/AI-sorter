@@ -1,311 +1,470 @@
 # DOC-008
-
 # Configuration Manager
 
-**Project:** AI Image Collection Management System
-
-**Document:** DOC-008
-
-**Version:** 1.0
-
+**Project:** AI Image Collection Management System  
+**Document:** DOC-008  
+**Version:** 2.0  
 **Status:** Design Specification
+
+**Related:** DOC-003, DOC-005, DOC-007, DOC-010, DOC-301, DOC-302
 
 ---
 
 # 1. Purpose
 
-Configuration Manager provides a central location for all user-configurable settings used by the project.
+Configuration Manager provides a central source of user-configurable application and module settings.
 
-Its purpose is to eliminate hardcoded values from modules while allowing the user to customise the system without modifying source code.
+Its primary purpose is to prevent modules from depending on hard-coded values or maintaining unrelated configuration files.
 
-Configuration Manager stores only application settings.
-
-It never stores image metadata or analysis results.
+Configuration Manager stores configuration. It does not replace the project database and does not own image metadata, analysis results or user classification decisions.
 
 ---
 
-# 2. Design Philosophy
+# 2. Architectural Principle
 
-Configuration is shared across the entire project.
+Configuration Manager is shared infrastructure.
 
-Modules should read their configuration from Configuration Manager instead of maintaining separate configuration files whenever practical.
+Modules obtain their configuration from the common configuration system rather than embedding project-specific values in their implementation.
 
-The goal is to provide one consistent source of settings.
+In particular, modules must not hard-code concepts such as:
+
+```text
+TODO
+AI
+FINAL
+Anime
+Themes
+```
+
+or assume fixed filesystem paths.
+
+Physical collection structure is defined by Collection Definition and is governed by DOC-301 and DOC-302.
+
+Configuration Manager may provide access to that configuration, but must not redefine it.
 
 ---
 
-# 3. Responsibilities
+# 3. Configuration vs Operational Data
+
+The project distinguishes between configuration and operational data.
+
+### Configuration
+
+Examples:
+
+* module settings;
+* confidence thresholds;
+* worker/thread limits;
+* enabled/disabled options;
+* logging preferences;
+* UI preferences;
+* database connection/storage settings;
+* application paths;
+* processing limits.
+
+### Operational data
+
+Examples:
+
+* files;
+* SHA512 values;
+* image metadata;
+* analysis results;
+* classifications;
+* Review Queue entries;
+* file history;
+* collection runtime state.
+
+Operational data belongs to the project database and is not duplicated into Configuration Manager merely for convenience.
+
+---
+
+# 4. Responsibilities
 
 Configuration Manager is responsible for:
 
 * loading configuration;
 * validating configuration;
-* saving configuration;
-* providing configuration values to modules;
-* restoring default values.
+* exposing configuration values to modules;
+* saving configuration changes;
+* applying defaults;
+* importing and exporting configuration where supported;
+* detecting invalid or incompatible configuration;
+* providing a consistent configuration view to running modules.
+
+Configuration Manager is not responsible for executing modules.
 
 ---
 
-# 4. Configuration Categories
+# 5. Configuration Scope
 
-Configuration is divided into logical groups.
+Configuration may exist at several logical levels.
 
-Examples:
+### Application-level
 
-General
+Settings affecting the application as a whole.
 
-Scanner
+### Module-level
 
-Analysis Modules
+Settings belonging to one module.
 
-AutoSort
+### Collection-level
 
-Collection Definition
+Settings associated with a configured collection where appropriate.
 
-Maintenance Modules
+The actual collection definition itself is not owned by Configuration Manager. It is defined by DOC-302.
 
-Database
+### User-interface level
 
-Logging
+Settings affecting presentation and user preferences.
 
-User Interface
-
-Future modules may introduce additional categories.
+The system should avoid duplicating the same value at several levels unless a defined override mechanism exists.
 
 ---
 
-# 5. General Configuration
+# 6. Application Configuration
 
-Examples:
+Possible application-level settings include:
 
 * application language;
-* default working directories;
-* logging level;
-* temporary directory;
-* automatic backup options.
+* temporary/work directory;
+* default log location;
+* default export location;
+* global resource limits;
+* application behaviour options.
+
+These are examples, not a fixed mandatory list.
 
 ---
 
-# 6. Scanner Configuration
+# 7. Module Configuration
+
+Each module may define settings required for its operation.
 
 Examples:
 
-* maximum worker threads;
-* supported file extensions;
-* recursive scan options;
-* SHA512 behaviour;
-* logging verbosity.
+### Scanner
+
+```text
+worker/thread limit
+supported extensions
+scan behaviour
+```
+
+### Universe Analysis
+
+```text
+confidence threshold
+model selection
+processing limits
+```
+
+### Character Analysis
+
+```text
+confidence threshold
+model selection
+```
+
+### Theme Analysis
+
+```text
+confidence threshold
+```
+
+### File Renamer
+
+```text
+enabled rule sets
+collision behaviour
+review behaviour
+```
+
+Configuration Manager stores and validates these values but does not interpret their module-specific meaning.
+
+The module specification remains authoritative for the semantics of its settings.
 
 ---
 
-# 7. Analysis Module Configuration
+# 8. Collection Configuration
 
-Each analysis module may expose its own settings.
+Collection configuration is defined by:
 
-Examples:
+```text
+DOC-301 – Collection Definition Wizard
+DOC-302 – Collection Definition Format
+```
 
-Universe Analysis
+A collection may contain user-defined roots and associated properties such as:
 
-* confidence threshold
+```text
+path
+role
+recursive
+enabled
+access policy
+```
 
-Character Analysis
+Configuration Manager must not introduce a second, competing definition of these properties.
 
-* confidence threshold
+For example, it must not separately store:
 
-Theme Analysis
+```text
+AI path = X
+FINAL path = Y
+```
 
-* confidence threshold
+when those values are already part of the Collection Definition.
 
-Set Filter
-
-* similarity threshold
-
-B&W Analysis
-
-* monochrome tolerance
-
-The Configuration Manager does not interpret these values.
-
-It only stores and provides them.
-
----
-
-# 8. Collection Definition Configuration
-
-Examples:
-
-* Collection Tree locations;
-* Classification Boundary options;
-* update behaviour.
+Instead, modules obtain the authoritative collection definition through the project's configuration/database architecture.
 
 ---
 
-# 9. AutoSort Configuration
+# 9. Directory Access Policy
 
-Examples:
+Directory Access Policy is a collection/root-level architectural concept.
 
-* AI workspace location;
-* directory creation behaviour;
-* reporting options.
+Proposed values include:
 
-AutoSort configuration never contains FINAL paths generated automatically.
+```text
+PROTECTED
+READ_ONLY
+MODIFY
+PLAYGROUND
+```
 
-Those are provided by Collection Definition.
+The formal definition belongs to the dedicated Directory Access Policy specification.
 
----
+Configuration Manager may store or expose the configured value, but must not redefine its semantics.
 
-# 10. Maintenance Configuration
-
-Examples:
-
-Collection Consistency Checker
-
-* migration confidence thresholds;
-* report output directory;
-* export format;
-* CSV delimiter.
+Modules must respect the policy applicable to the root they are operating on.
 
 ---
 
-# 11. Database Configuration
+# 10. Validation
 
-Examples:
+Configuration must be validated before it becomes active.
 
-* database location;
-* connection parameters;
-* backup settings;
-* cache behaviour.
+Validation may include:
 
-Sensitive information should be protected appropriately.
+* numeric range checks;
+* enum/value checks;
+* incompatible-option checks;
+* existence or accessibility checks for paths where appropriate;
+* duplicate configuration detection;
+* module compatibility checks;
+* configuration version compatibility.
 
----
+A configuration error must produce an understandable diagnostic.
 
-# 12. Logging Configuration
+Invalid configuration must not silently become active.
 
-Examples:
-
-* log directory;
-* maximum log size;
-* log retention period;
-* verbosity level.
+A path that does not currently exist is not necessarily an invalid configuration. Some configured directories may intentionally be created later by the system.
 
 ---
 
-# 13. User Interface Configuration
+# 11. Defaults
 
-Examples:
+Every configurable option should define a default where a meaningful default exists.
 
-* theme;
-* language;
-* window layout;
-* progress display;
-* default export locations.
+Defaults must not silently override explicit user configuration.
+
+If an option has no safe universal default, the system should require explicit configuration instead of inventing one.
 
 ---
 
-# 14. Configuration Storage
+# 12. Configuration Versioning
 
-The physical storage format is intentionally unspecified.
+Configuration should contain a format/schema version.
 
-Possible implementations include:
+When configuration structure changes, the Configuration Manager may migrate older configuration to the current format.
 
-* JSON
-* SQLite
-* XML
-* YAML
+A failed migration must not silently destroy the previous configuration.
 
-The storage mechanism may change without affecting module behaviour.
+Backward compatibility should be maintained where practical.
 
 ---
 
-# 15. Validation
+# 13. Module Registration
 
-Configuration Manager validates configuration before it becomes active.
+Modules may register their configuration definitions with Configuration Manager.
 
-Examples:
+A registration should identify at least:
 
-* missing directories;
-* invalid numeric ranges;
-* duplicate Collection Trees;
-* unsupported values.
+```text
+module identifier
+configuration keys
+value types
+allowed ranges/values where applicable
+default values where applicable
+```
 
-Invalid configuration should never crash the application.
+Configuration Manager does not need to understand the internal implementation of a module.
 
----
-
-# 16. Default Values
-
-Every configurable option shall define a default value.
-
-The system must remain usable immediately after installation.
+This permits new modules to introduce configuration without redesigning the entire configuration subsystem.
 
 ---
 
-# 17. Import and Export
+# 14. Runtime Configuration
 
-Configuration should support:
+A module should obtain a consistent configuration snapshot for an execution.
+
+A configuration change made while a long-running module is executing should not cause unpredictable changes halfway through an operation unless the module explicitly supports dynamic configuration.
+
+The preferred default behaviour is:
+
+```text
+load/validate configuration
+        ↓
+start execution
+        ↓
+use stable configuration snapshot
+        ↓
+finish execution
+```
+
+---
+
+# 15. Configuration Changes
+
+Configuration changes are user-controlled unless a future specification explicitly defines another mechanism.
+
+A change should be validated before becoming active.
+
+Where a change affects a running module, the new value normally applies to the next execution rather than silently changing the current execution.
+
+---
+
+# 16. Import and Export
+
+Configuration should support, where practical:
 
 * export;
 * import;
 * backup;
 * restore.
 
-This allows migration between installations.
+Exported configuration should contain configuration data rather than transient operational data.
+
+Import must validate the complete configuration before replacing the active configuration.
+
+A failed import must leave the previous valid configuration intact.
 
 ---
 
-# 18. Module Registration
+# 17. Storage
 
-Each module registers its configurable parameters with Configuration Manager.
+The physical configuration-storage format is an implementation decision.
 
-Configuration Manager itself does not require knowledge of module internals.
+Possible approaches include:
 
-This allows future modules to be added without redesigning the configuration system.
+```text
+JSON
+SQLite
+XML
+YAML
+```
 
----
+The chosen mechanism must provide reliable persistence and must not require Internet connectivity.
 
-# 19. Separation of Responsibilities
-
-Configuration Manager stores:
-
-* application settings;
-* module settings;
-* user preferences.
-
-Configuration Manager does **not** store:
-
-* image metadata;
-* analysis observations;
-* Collection Definition;
-* migration suggestions;
-* SHA512 values;
-* image tags.
-
-Those belong to the project database.
+The logical configuration model must remain independent from the storage format.
 
 ---
 
-# 20. Design Principles
+# 18. Separation from Database
 
-Configuration Manager:
+Configuration Manager and the project database have different responsibilities.
 
-* provides one central configuration source;
-* remains independent of analysis modules;
-* validates user input;
-* supports future expansion;
-* separates configuration from operational data.
+```text
+Configuration Manager
+    ↓
+settings controlling how the application/modules operate
+
+Project Database
+    ↓
+files, SHA512, metadata, analysis, classifications, history, review data
+```
+
+The database may contain configuration-related entities where required by the architecture, but Configuration Manager remains the logical owner of application configuration.
+
+The same setting must not have two competing sources of truth.
 
 ---
 
-# 21. Acceptance Criteria
+# 19. Security
 
-Configuration Manager is considered complete when:
+Configuration may contain sensitive information depending on future modules.
 
-* modules obtain configuration from a common source;
-* configuration can be validated;
-* default values exist for every option;
-* configuration can be exported and imported;
-* operational image data remains stored exclusively in the project database.
+Sensitive values must not be written to ordinary logs in plaintext.
+
+If credentials or other secrets are ever required, their storage must use an appropriate protected mechanism rather than relying on ordinary readable configuration text alone.
+
+---
+
+# 20. Failure Handling
+
+Configuration Manager must fail safely.
+
+Examples:
+
+```text
+invalid configuration
+missing configuration file
+corrupted configuration
+unsupported configuration version
+failed import
+```
+
+The system should preserve the last known valid configuration where possible.
+
+Configuration failure must produce an understandable diagnostic and must not silently fall back to unsafe values.
+
+---
+
+# 21. Relationship with Module Execution
+
+DOC-007 defines module execution.
+
+Before execution, a module should obtain a validated configuration snapshot.
+
+Configuration Manager does not decide whether a module should run. Execution remains under the rules defined by DOC-007 and the individual module specification.
+
+---
+
+# 22. Relationship with Module Interface
+
+DOC-010 defines the module interface.
+
+Configuration access should be available to modules through the common application infrastructure rather than through undocumented module-specific configuration files.
+
+The module interface should expose configuration access only to the extent necessary for module operation.
+
+---
+
+# 23. Offline Operation
+
+Configuration Manager must support normal operation without Internet connectivity.
+
+No configuration operation may require an online service unless a future optional integration explicitly introduces such a dependency.
+
+---
+
+# 24. Acceptance Criteria
+
+Configuration Manager is architecturally acceptable when:
+
+* modules can obtain configuration from a common source;
+* modules do not require hard-coded project paths or folder names;
+* collection definitions are not duplicated outside DOC-301/DOC-302;
+* module-specific settings remain owned by the relevant module specifications;
+* configuration is validated before becoming active;
+* safe defaults exist where appropriate;
+* configuration format changes can be versioned or migrated;
+* import/export can be performed safely;
+* invalid imports do not destroy the previous valid configuration;
+* running modules can use a stable configuration snapshot;
+* operational image data remains in the project database;
+* normal configuration operation does not require Internet access.
 
 ---
 
