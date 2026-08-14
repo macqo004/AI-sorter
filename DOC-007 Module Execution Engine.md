@@ -1,215 +1,511 @@
-DOC-007
-Module Architecture
+# DOC-007
 
-Project: AI Image Collection Management System
+# Module Execution and Architecture
 
-Document: DOC-007
+**Project:** AI Image Collection Management System
 
-Version: 1.0
+**Document:** DOC-007
 
-Status: Approved
+**Version:** 2.0
 
-1. Purpose
+**Status:** Draft
 
-This document defines the architectural principles shared by every module in the project.
+**Depends on:**
 
-It specifies how modules interact with the rest of the system and establishes the design rules that all current and future modules must follow.
+DOC-003
+DOC-005
+DOC-008
+DOC-010
+DOC-011
 
-2. Design Philosophy
+---
 
-The project is based on independent modules.
+# 1. Purpose
 
-Each module performs one clearly defined task.
+This document defines the common execution model and architectural rules for project modules.
 
-Modules never communicate directly with one another.
+It describes how modules are started, how they operate independently, how execution state is exposed to the user, and how module execution is recorded.
 
-The database is the only shared communication layer.
+This document does not define the internal algorithm of an individual module.
 
-3. Module Independence
+It also does not define the configuration format itself; that responsibility belongs to DOC-008 and, where applicable, collection configuration documentation.
 
-Every module shall:
+---
 
-run independently;
-be executable without starting other modules;
-perform only its own task;
-terminate after completing its work.
+# 2. Module Definition
 
-Modules are not permanently resident in memory.
+A module is an independent executable component responsible for a clearly defined system function.
 
-4. User-Controlled Execution
+Examples include:
 
-Modules are started exclusively by the user.
+```text
+Scanner
+Color Analysis
+Screenshot Analysis
+Universe Analysis
+Character Analysis
+Theme Analysis
+File Renamer
+Database Maintenance
+Collection Consistency Checker
+```
 
-The project contains:
+A module may read information produced by other modules when that information is relevant to its own operation.
 
-no scheduler;
-no automatic execution engine;
-no workflow manager.
+A module must not become responsible for another module's function merely because it consumes its output.
+
+---
+
+# 3. Module Independence
+
+Each module should be independently executable.
+
+A module should not require another module process to remain running while it performs its work.
+
+Modules communicate persistent information through the shared database and through the interfaces defined by the project architecture.
+
+A module may use operating-system facilities, libraries and other technical dependencies required to perform its own task. The rule against direct module-to-module communication is intended to prevent hidden application-level coupling, not to prohibit ordinary operating-system functionality.
+
+Modules normally terminate after completing the requested operation. The architecture does not require permanently resident module processes.
+
+---
+
+# 4. User-Controlled Execution
+
+Modules are normally started by the user.
+
+The current architecture does not require a global scheduler, automatic workflow engine or dependency resolver.
 
 The user decides:
 
-which module to run;
-when to run it;
-how often to run it.
-5. Execution Order
+* which module to run;
+* when to run it;
+* which configured collection or scope to process;
+* how often to run it.
 
-Modules may be executed in any order.
+A future component may introduce optional automation without changing the fundamental independence of modules, provided such functionality is explicitly specified.
 
-Some modules naturally produce more useful results when previous modules have already populated the database.
+---
 
-Example:
+# 5. Execution Order and Dependencies
 
+There is no globally mandatory execution order.
+
+A module may have logical dependencies on data produced by another module.
+
+For example:
+
+```text
 Scanner
+    ↓
+Universe Analysis
+    ↓
+Character Analysis
+```
 
-↓
+may be a useful operational sequence, but the system does not automatically enforce it.
+
+A module that requires particular input data must detect the absence or insufficiency of that data and handle the situation according to its own specification.
+
+It must not silently assume that another module has already run.
+
+Dependencies should therefore be expressed as **data requirements**, not as a requirement that another module process be running.
+
+---
+
+# 6. Shared Database
+
+The project database is the primary shared persistence and communication layer between modules.
+
+Modules should exchange analysis and processing state through the database rather than through ad-hoc temporary files or direct calls between module implementations.
+
+The database contains information such as:
+
+* file identity and filesystem state;
+* analysis results;
+* classifications;
+* module execution records;
+* collection configuration where applicable;
+* user decisions;
+* review information;
+* historical events.
+
+The logical database model is defined by DOC-005.
+
+A module may read information owned by another component when that information is part of the documented input to its operation.
+
+---
+
+# 7. Module Input and Output
+
+Each module specification should define:
+
+* accepted input scope;
+* required database state;
+* configuration parameters;
+* files or records it may inspect;
+* data it produces;
+* filesystem operations it may perform;
+* error conditions;
+* user decisions it may request.
+
+A module should not modify data outside its documented responsibility.
+
+For example, an analysis module may create or update its own analysis results but should not silently alter another analysis module's results or user decisions.
+
+---
+
+# 8. Module Execution Record
+
+Each actual module run should have a corresponding **Module Execution** record as defined by DOC-005.
+
+The execution record may contain:
+
+```text
+execution_id
+module_id
+started_at
+finished_at
+status
+files_processed
+files_skipped
+files_failed
+notes
+```
+
+The exact physical schema is defined by the database implementation.
+
+An execution record describes one invocation of a module. It does not represent a file and must not be used as a substitute for file identity.
+
+---
+
+# 9. Execution States
+
+A module execution should expose at least the following logical states:
+
+```text
+STARTING
+RUNNING
+COMPLETED
+CANCELLED
+FAILED
+```
+
+The database execution record may use a subset or implementation-specific representation where appropriate, but the user interface should provide an understandable indication of the execution state.
+
+A module may additionally report intermediate states such as pausing or finalizing if its operation benefits from them.
+
+---
+
+# 10. User Interface Feedback
+
+Every module with a user-facing interface should provide visible confirmation that execution has started.
+
+At minimum, the user should be able to determine:
+
+* whether the module has started;
+* whether it is currently running;
+* whether it completed successfully;
+* whether it was cancelled;
+* whether an error occurred.
+
+A progress indicator should be used when meaningful progress can be measured.
+
+Where progress cannot be estimated reliably, an activity indicator and useful status information are sufficient.
+
+The purpose is not merely cosmetic: visible execution state reduces the risk of the user accidentally launching the same operation repeatedly because the first invocation appears unresponsive.
+
+---
+
+# 11. Repeated Execution
+
+A module may be executed repeatedly.
+
+Repeated execution is not inherently an error.
+
+The module must use the database state and its own specification to determine which records require work.
+
+A module should avoid unnecessary reprocessing where the relevant analysis or state is already valid, but the decision to rerun a module remains under user control unless a future automation mechanism explicitly changes this rule.
+
+Detailed reprocessing rules belong to the relevant module and future reprocessing architecture such as DOC-205.
+
+---
+
+# 12. Concurrent Execution
+
+The project is primarily designed for a single user.
+
+The architecture does not require a complex global concurrency manager.
+
+However, modules must not assume that duplicate execution is impossible.
+
+Where simultaneous execution could corrupt data, duplicate work or produce unsafe filesystem operations, the relevant module must provide appropriate protection.
+
+Such protection may include:
+
+* refusing a second instance;
+* detecting an active execution record;
+* acquiring a local lock;
+* requiring explicit user confirmation.
+
+The mechanism should be proportional to the actual risk.
+
+A module must not rely solely on the user remembering whether another instance is running.
+
+---
+
+# 13. Error Isolation
+
+Failure of one module must not invalidate unrelated completed work.
+
+A module should preserve successfully completed operations whenever safe to do so.
+
+For example:
+
+```text
+File A → processed successfully
+File B → processed successfully
+File C → processing failed
+```
+
+The successful results for A and B should not be discarded merely because C failed.
+
+The exact transaction boundaries are defined by the individual module and database specifications.
+
+Errors must be logged according to DOC-011.
+
+Cases requiring user intervention should use Review Queue where appropriate.
+
+---
+
+# 14. Cancellation
+
+A user should be able to cancel a long-running module when the module can safely support cancellation.
+
+Cancellation should stop new work and allow the module to leave already completed work in a valid state.
+
+A cancellation must not be represented as a successful completion.
+
+The execution record should distinguish at least between successful completion, cancellation and failure.
+
+Modules that cannot safely stop immediately may finish their current atomic operation before terminating.
+
+---
+
+# 15. Configuration
+
+Modules obtain configurable behaviour from the project configuration system rather than hard-coding collection-specific paths or assumptions.
+
+Examples include:
+
+```text
+input root
+recursive scanning
+access policy
+processing limits
+confidence thresholds
+enabled/disabled state
+```
+
+Configuration ownership is defined by DOC-008 and collection configuration documents.
+
+A module should not infer architectural meaning from directory names such as `TODO`, `AI`, `FINAL`, `Anime` or `Themes`.
+
+---
+
+# 16. Access and Filesystem Operations
+
+A module may inspect or modify files only within the scope permitted by its configuration and the applicable Directory Access Policy.
+
+The fact that a directory is considered part of a final collection does not by itself make it permanently immutable.
+
+For example, a consistency or classification workflow may identify a wrongly placed file in a final tree. The normal correction mechanism may move the file into an appropriate workspace for user review rather than silently modifying the final collection.
+
+The detailed access policy is defined by the project-wide Directory Access Policy specification.
+
+---
+
+# 17. Module Ownership
+
+Each module has a defined responsibility and owns the outputs that belong to that responsibility.
+
+Ownership means that the module is responsible for maintaining the validity of its own results; it does not mean that the module may arbitrarily modify the rest of the database.
+
+Examples:
+
+```text
+Scanner
+    filesystem discovery and synchronization state
 
 Universe Analysis
-
-↓
+    universe analysis results
 
 Character Analysis
+    character analysis results
 
-However, the system never enforces this sequence.
+File Renamer
+    permitted filename changes
 
-6. Shared Database
+Database Maintenance
+    maintenance operations defined by its specification
+```
 
-Modules exchange information exclusively through the project database.
+User decisions remain user-owned information and must not be silently overwritten by module output.
 
-Modules never:
+---
 
-call other modules;
-exchange files;
-communicate through memory;
-communicate through sockets.
+# 18. Module Categories
 
-All persistent information is stored in the database.
+Module categories are organizational labels, not execution dependencies.
 
-7. Reading Existing Data
+They may include:
 
-Before performing work, a module should use existing database information whenever possible.
-
-Example:
-
-Scanner:
-
-checks stored file metadata;
-reuses existing SHA512 values when valid.
-
-Universe Analysis:
-
-reads image information already stored by Scanner.
-
-Character Analysis:
-
-reads Universe observations from the database.
-8. Writing Results
-
-Each module is responsible only for writing its own observations.
-
-A module shall never overwrite data owned by another module unless explicitly designed to update its own previous results.
-
-9. Repeated Execution
-
-Modules may be executed repeatedly.
-
-The system does not prevent repeated execution.
-
-Whether a module should be executed again is entirely the user's decision.
-
-10. Parallel Execution
-
-The project assumes a single user operating the application.
-
-Simultaneous execution protection is not required.
-
-Future versions may introduce optional safeguards if necessary.
-
-11. User Feedback
-
-Every module should provide visible execution status.
-
-Minimum requirements:
-
-starting indication;
-running indication;
-completion indication;
-error indication.
-
-A progress bar is recommended when measurable progress is available.
-
-Otherwise, an activity indicator (spinner) is sufficient.
-
-The purpose is to assure the user that the module has started successfully.
-
-12. Error Handling
-
-Failure of one module must not prevent execution of any other module.
-
-Modules are isolated.
-
-Errors are logged.
-
-Successfully completed work is preserved.
-
-13. Extensibility
-
-Adding a new module should require:
-
-implementing the module itself;
-registering its configuration;
-defining its database fields if required.
-
-Existing modules should not require modification.
-
-14. Module Categories
-
-Modules currently belong to three groups.
-
-Infrastructure
+### Infrastructure
 
 Examples:
 
+```text
 Scanner
+Configuration Manager
 Collection Definition Wizard
+```
+
+### Processing
+
+Examples:
+
+```text
 AutoSort
-Analysis
+File Renamer
+```
+
+### Analysis
 
 Examples:
 
-B&W
-Screenshot
-Meme
-IRL
-Universe
-Character
-Theme
-Set Filter
-Maintenance
+```text
+Color Analysis
+Screenshot Analysis
+Reaction Image Analysis
+IRL Analysis
+Cosplay Analysis
+Universe Analysis
+Character Analysis
+Theme Analysis
+Set Detection and Grouping
+```
+
+### Maintenance / Validation
 
 Examples:
 
+```text
+Database Maintenance
 Collection Consistency Checker
+```
 
-Additional categories may be introduced in future versions.
+Categories may be changed or extended without changing the execution model.
 
-15. Design Principles
+---
 
-Every module should:
+# 19. Extensibility
 
-perform one task only;
-remain independent;
-communicate only through the database;
-be started manually by the user;
-produce reproducible results;
-log its activity;
-avoid modifying data outside its responsibility.
-16. Acceptance Criteria
+Adding a module should normally require:
+
+* implementing the module;
+* defining its interface and configuration requirements;
+* registering it where required by the application;
+* defining any new persistent data required by its specification;
+* documenting its behaviour.
+
+Existing modules should not need modification merely because an unrelated module was added.
+
+This principle does not prohibit changes to shared standards when a genuinely new architectural requirement affects multiple modules.
+
+For example, a new module may reveal the need for a new shared logging or database concept. In such a case, the shared standard should be updated rather than duplicating the concept in every module.
+
+---
+
+# 20. Reproducibility
+
+Where practical, a module should produce results that can be explained and reproduced from:
+
+* its version;
+* relevant configuration;
+* input data;
+* database state;
+* applicable model or rule version.
+
+Perfect bit-for-bit reproducibility is not required for inherently probabilistic AI models unless a specific module requires it.
+
+Execution records should contain enough information to identify which module version performed the operation.
+
+---
+
+# 21. Logging
+
+Every module must produce logs according to DOC-011.
+
+At minimum, logging should allow the user to determine:
+
+* what operation was started;
+* when it started;
+* what happened during execution;
+* whether execution completed, failed or was cancelled;
+* which significant errors occurred;
+* whether user intervention is required.
+
+Module-specific logging requirements belong to the module's own specification.
+
+---
+
+# 22. Relationship with Module Interface
+
+DOC-007 defines the common execution architecture.
+
+DOC-010 defines the common module interface contract.
+
+The distinction is:
+
+```text
+DOC-007
+    How modules operate within the system
+
+DOC-010
+    What interface a module exposes
+```
+
+Individual module documents define what each module actually does.
+
+DOC-007 must not duplicate the detailed interface fields defined by DOC-010.
+
+---
+
+# 23. Relationship with Configuration Manager
+
+DOC-008 defines configuration management.
+
+DOC-007 establishes that modules obtain configurable behaviour through the configuration system and do not hard-code collection-specific paths or roles.
+
+The execution engine itself does not become the owner of collection definitions merely because it consumes their configuration.
+
+---
+
+# 24. Acceptance Criteria
 
 The module architecture is considered correctly implemented when:
 
-every module runs independently;
-no module depends on another process being active;
-all communication occurs through the database;
-the user controls execution;
-new modules can be added without redesigning the existing architecture.
-End of DOC-007
+* modules can be executed independently;
+* the user controls execution under the current architecture;
+* modules do not require another module process to remain active;
+* persistent inter-module information is exchanged through documented shared state;
+* execution state is visible to the user;
+* executions are recorded appropriately;
+* failures do not unnecessarily invalidate unrelated completed work;
+* user decisions are not silently overwritten;
+* configuration is not replaced by hard-coded collection paths or roles;
+* adding an unrelated module does not require unnecessary modification of existing modules.
+
+---
+
+# End of DOC-007
