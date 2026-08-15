@@ -6,7 +6,7 @@
 
 **Document:** DOC-010
 
-**Version:** 2.1
+**Version:** 2.2
 
 **Status:** Draft
 
@@ -38,28 +38,51 @@ A module is an independently executable component with a clearly defined primary
 
 Modules do not communicate directly with one another. Persistent information exchanged between modules is exchanged through the project database.
 
-Modules therefore have **no required execution sequence relative to one another**. One module may be executed many times while another module is not executed at all, and a module may be started again after other modules have run.
+The modules are intentionally not arranged into a mandatory global processing pipeline. One module may be executed many times before or after another module, and one module may be run without running other modules again.
 
 For example, the following is valid:
 
 ```text
-Day 1–10:
-    IRL Analysis × 5
-
-    Screenshot Analysis × 2
-
-    IRL Analysis × 1
+IRL Analysis × 5
+Screenshot Analysis × 2
+IRL Analysis × 1
 ```
 
-The final IRL execution is not a continuation of a process owned by Screenshot Analysis. It is an independent execution that reads the current database state available to it.
+The final IRL execution is an independent execution. It reads the current database state available to it and does not continue a process owned by Screenshot Analysis.
 
-A module may benefit from information previously written by another module, but the producing module does not need to be running and the consuming module does not depend on the producer's execution history except where explicitly required as a data prerequisite.
+A module may benefit from information previously written by another module, but the producing module does not need to be running.
 
 A module may use the filesystem, operating-system facilities, libraries, GPU resources and other resources required for its own work. These are not considered direct module-to-module communication.
 
 ---
 
-# 3. Required Module Information
+# 3. Base Data-Ingestion Requirement
+
+The **Scanner** is the base data-ingestion module.
+
+A new file added to a configured processing/source root must first be discovered by Scanner and represented in the database before ordinary modules can process that file through the database-driven architecture.
+
+Therefore:
+
+```text
+new filesystem file
+        ↓
+Scanner
+        ↓
+valid database file record
+        ↓
+other modules may process the file
+```
+
+This is a data-availability requirement, not a general module-ordering rule.
+
+After a valid file record exists, other modules remain independent of Scanner and of one another. Scanner does not need to run immediately before another module execution.
+
+A module that requires a file record must not invent a temporary file identity when the record does not exist.
+
+---
+
+# 4. Required Module Information
 
 Every module should expose, at minimum:
 
@@ -77,7 +100,7 @@ An optional author or maintainer field may be provided but is not required for f
 
 ---
 
-# 4. Initialization Contract
+# 5. Initialization Contract
 
 When a module starts, it shall perform the initialization checks required for safe execution.
 
@@ -98,7 +121,7 @@ Modules may omit checks that are irrelevant to their operation.
 
 ---
 
-# 5. Input Contract
+# 6. Input Contract
 
 Each module specification shall document its required inputs.
 
@@ -115,9 +138,11 @@ A module must not require another module process to be running in order to obtai
 
 Where a module depends on results produced by another module, that dependency is expressed as a database data requirement.
 
+The presence of another module's result is therefore a property of database state, not a process-level dependency.
+
 ---
 
-# 6. Output Contract
+# 7. Output Contract
 
 Each module specification shall document the outputs it may produce.
 
@@ -136,7 +161,7 @@ Modules shall write persistent information that may be useful to other modules t
 
 ---
 
-# 7. Database Ownership and Shared Information
+# 8. Database Ownership and Shared Information
 
 A module owns the analysis or operational data it is explicitly responsible for producing.
 
@@ -167,7 +192,7 @@ The logical database model is defined by DOC-005.
 
 ---
 
-# 8. File Identity
+# 9. File Identity
 
 Modules shall use the project's File Identity Model when referring to files.
 
@@ -181,7 +206,7 @@ If the file's binary content changes and therefore its SHA512 changes, the modul
 
 ---
 
-# 9. Configuration
+# 10. Configuration
 
 Configurable parameters shall be obtained from the project configuration system rather than hard-coded into the module.
 
@@ -202,7 +227,7 @@ A module must not infer functional meaning from a physical directory name such a
 
 ---
 
-# 10. Collection Scope
+# 11. Collection Scope
 
 When a module operates on a collection, the scope shall be obtained from the configured Collection Definition rather than hard-coded paths.
 
@@ -220,7 +245,7 @@ The physical locations of the roots are defined by collection configuration.
 
 ---
 
-# 11. Access Policy
+# 12. Access Policy
 
 Filesystem operations are subject to the configured Directory Access Policy and the module's own permitted operations.
 
@@ -242,7 +267,7 @@ The detailed Directory Access Policy is defined by the project-wide access-polic
 
 ---
 
-# 12. Execution State
+# 13. Execution State
 
 A module shall expose a user-visible execution state while running.
 
@@ -263,7 +288,7 @@ The user interface must make the current state understandable without requiring 
 
 ---
 
-# 13. Progress Reporting
+# 14. Progress Reporting
 
 A module should report progress when meaningful progress can be measured.
 
@@ -279,7 +304,7 @@ When reliable percentage progress cannot be calculated, a useful activity indica
 
 ---
 
-# 14. Cancellation
+# 15. Cancellation
 
 A long-running module should support user cancellation when this can be implemented safely.
 
@@ -294,7 +319,7 @@ A module may finish the current safe/atomic operation before terminating.
 
 ---
 
-# 15. Logging
+# 16. Logging
 
 Every module shall log its execution according to DOC-011.
 
@@ -311,7 +336,7 @@ Module-specific log details belong in the module specification.
 
 ---
 
-# 16. Error Handling
+# 17. Error Handling
 
 A module shall distinguish between errors that can be handled locally and errors that prevent safe continuation.
 
@@ -334,7 +359,7 @@ Cases requiring a user decision should use the Review Queue mechanism where appl
 
 ---
 
-# 17. Memory and Resource Usage
+# 18. Memory and Resource Usage
 
 Modules may use available RAM and other local resources where this provides a meaningful performance benefit.
 
@@ -346,7 +371,7 @@ Detailed resource limits may be configurable through DOC-008 or module-specific 
 
 ---
 
-# 18. Parallel Processing
+# 19. Parallel Processing
 
 A module may internally use multiple worker threads or processes where beneficial.
 
@@ -358,7 +383,7 @@ Parallel execution must not violate database or filesystem consistency rules.
 
 ---
 
-# 19. Repeated Execution and Reprocessing
+# 20. Repeated Execution and Reprocessing
 
 Modules may be executed repeatedly and independently of other modules.
 
@@ -384,7 +409,27 @@ Detailed reprocessing rules, including analysis-version invalidation, belong to 
 
 ---
 
-# 20. Input/Output Documentation
+# 21. Per-File Module Results
+
+When a module is executed while a file is within that module's configured processing scope, the module should create or update the database result applicable to that file, provided the file is successfully processed.
+
+This allows the database to represent module coverage on a per-file basis.
+
+For example, a file may have:
+
+```text
+IRL Analysis        → result present
+Screenshot Analysis → result present
+Universe Analysis   → result absent
+```
+
+The absence of a result for a particular module does not by itself mean that the module failed. The file may not have been in that module's scope when it last ran, the module may not yet have been run for that file, or the file may have been skipped or failed according to the module's rules.
+
+Each module is responsible for defining how its own result state is represented and how later executions determine whether processing is required.
+
+---
+
+# 22. Input/Output Documentation
 
 Each module document shall clearly define:
 
@@ -400,7 +445,7 @@ There must be no undocumented operational side effects.
 
 ---
 
-# 21. Module Interface vs Module Specification
+# 23. Module Interface vs Module Specification
 
 DOC-010 defines common requirements that apply to modules generally.
 
@@ -420,7 +465,7 @@ The module specification may strengthen or narrow a generic rule when necessary,
 
 ---
 
-# 22. Dependency Declaration
+# 24. Dependency Declaration
 
 Each module shall document its meaningful data dependencies.
 
@@ -446,7 +491,7 @@ They do not create direct module-to-module process dependencies or enforce globa
 
 ---
 
-# 23. Module Categories
+# 25. Module Categories
 
 Categories are organizational labels and do not define execution dependencies.
 
@@ -463,7 +508,7 @@ Future categories may be introduced when useful.
 
 ---
 
-# 24. Extensibility
+# 26. Extensibility
 
 Adding a new module should normally require:
 
@@ -479,7 +524,7 @@ This does not prevent updates to shared standards when a genuinely new architect
 
 ---
 
-# 25. Interface Compliance
+# 27. Interface Compliance
 
 A module is compliant with DOC-010 when its specification and implementation provide, as applicable:
 
@@ -495,13 +540,14 @@ A module is compliant with DOC-010 when its specification and implementation pro
 * isolation of module errors;
 * respect for database ownership and user decisions;
 * operation within the configured collection scope and access policy;
-* independent execution without requiring another module process to run.
+* independent execution without requiring another module process to run;
+* per-file persistence of its applicable results when files within its scope are successfully processed.
 
 Not every module needs every optional feature. The module's own specification determines which interface elements are applicable.
 
 ---
 
-# 26. Relationship with Other Documents
+# 28. Relationship with Other Documents
 
 ```text
 DOC-003  System Architecture
