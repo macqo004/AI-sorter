@@ -6,7 +6,7 @@
 
 **Document:** DOC-007
 
-**Version:** 2.1
+**Version:** 2.2
 
 **Status:** Draft
 
@@ -59,13 +59,13 @@ A module must not become responsible for another module's function merely becaus
 
 # 3. Module Independence and Communication
 
-Each module should be independently executable.
+Each module is independently executable within the limits of its documented input requirements.
 
-A module should not require another module process to remain running while it performs its work.
+A module normally does not require another module process to remain running while it performs its work.
 
 **Modules do not communicate directly with other modules.**
 
-When one module produces information intended for another module, that information is persisted in the shared database. The receiving module reads the required information from the database when it runs.
+When one module produces information that may be useful to another module, that information is persisted in the shared database. The receiving module reads the current applicable information from the database when it runs.
 
 The intended communication model is therefore:
 
@@ -89,7 +89,35 @@ Modules normally terminate after completing the requested operation. The archite
 
 ---
 
-# 4. User-Controlled Execution
+# 4. Scanner as the Base Data Ingestion Module
+
+The **Scanner** is a special infrastructure module because it establishes the database representation of files discovered in configured filesystem roots.
+
+A newly added file cannot be processed by ordinary analysis or processing modules until the Scanner has created or updated the corresponding file record in the database.
+
+This makes Scanner a **data-ingestion prerequisite**, not a global execution prerequisite for all module relationships.
+
+The following principle applies:
+
+```text
+new file in configured source/processing root
+        ↓
+Scanner
+        ↓
+file identity + filesystem state in database
+        ↓
+available to other modules
+```
+
+Once a file has a valid database record, other modules remain independent of Scanner and of one another. They may be run in any order, provided their own documented input requirements are satisfied.
+
+Scanner does not need to run immediately before every other module execution.
+
+If a file is not yet represented in the database, a module that requires a database file record must skip or report that file according to its own specification rather than inventing a partial file identity.
+
+---
+
+# 5. User-Controlled Execution
 
 Modules are normally started by the user.
 
@@ -106,13 +134,13 @@ A future component may introduce optional automation without changing the fundam
 
 ---
 
-# 5. Execution Order and Dependencies
+# 6. Execution Order and Dependencies
 
-There is no globally mandatory execution order.
+There is no globally mandatory execution order among ordinary modules.
 
 A module may have logical dependencies on data produced by another module.
 
-For example:
+For example, a useful operational sequence may be:
 
 ```text
 Scanner
@@ -122,17 +150,30 @@ Universe Analysis
 Character Analysis
 ```
 
-may be a useful operational sequence, but the system does not automatically enforce it.
+but the system does not enforce this sequence.
+
+A module dependency means that the required **data must exist in the database**, not that another module must have been executed immediately beforehand or that the other module process must still be running.
 
 A module that requires particular input data must detect the absence or insufficiency of that data and handle the situation according to its own specification.
 
-It must not silently assume that another module has already run.
+The resulting execution history may therefore look like:
 
-Dependencies should therefore be expressed as **data requirements**, not as a requirement that another module process be running.
+```text
+Day 1–10:
+    IRL Analysis × 5
+
+Later:
+    Screenshot Analysis × 2
+
+Later:
+    IRL Analysis × 1
+```
+
+This is valid. The number and timing of executions of one module do not impose a schedule on another module.
 
 ---
 
-# 6. Shared Database
+# 7. Shared Database
 
 The project database is the primary shared persistence and inter-module communication layer.
 
@@ -153,9 +194,11 @@ The logical database model is defined by DOC-005.
 
 A module may read information owned by another component when that information is part of the documented input to its operation.
 
+A module may also write information to the database for use by later executions of itself or by other modules, provided that the module owns that information and the write is part of its documented responsibility.
+
 ---
 
-# 7. Module Input and Output
+# 8. Module Input and Output
 
 Each module specification should define:
 
@@ -174,7 +217,34 @@ For example, an analysis module may create or update its own analysis results bu
 
 ---
 
-# 8. Module Execution Record
+# 9. Module Results and Per-File Processing State
+
+A module execution operates on a defined scope. For every file that is within that scope and successfully processed, the module should persist its result in the database according to its specification.
+
+This means that the database can distinguish at least between:
+
+```text
+module has processed this file
+module has not processed this file
+module attempted this file but failed
+module intentionally skipped this file
+```
+
+The absence of a module-specific result does not necessarily indicate an error. A file may have:
+
+* been outside the module's configured scope;
+* been added after the module's last execution;
+* been skipped because of module rules;
+* failed processing;
+* not yet been processed by that module.
+
+The exact representation of these states is module-specific, but the architecture must allow them to be distinguished where necessary.
+
+A module result is associated with the file's database identity and the module execution that produced it.
+
+---
+
+# 10. Module Execution Record
 
 Each actual module run should have a corresponding **Module Execution** record as defined by DOC-005.
 
@@ -198,7 +268,7 @@ An execution record describes one invocation of a module. It does not represent 
 
 ---
 
-# 9. Execution States
+# 11. Execution States
 
 A module execution should expose at least the following logical states:
 
@@ -216,7 +286,7 @@ A module may additionally report intermediate states such as pausing or finalizi
 
 ---
 
-# 10. User Interface Feedback
+# 12. User Interface Feedback
 
 Every module with a user-facing interface should provide visible confirmation that execution has started.
 
@@ -236,7 +306,7 @@ The purpose is not merely cosmetic: visible execution state reduces the risk of 
 
 ---
 
-# 11. Repeated Execution
+# 13. Repeated Execution
 
 A module may be executed repeatedly.
 
@@ -248,9 +318,11 @@ A module should avoid unnecessary reprocessing where the relevant analysis or st
 
 Detailed reprocessing rules belong to the relevant module and future reprocessing architecture such as DOC-205.
 
+Repeated execution of one module does not require or imply execution of any other module.
+
 ---
 
-# 12. Concurrent Execution
+# 14. Concurrent Execution
 
 The project is primarily designed for a single user.
 
@@ -273,7 +345,7 @@ A module must not rely solely on the user remembering whether another instance i
 
 ---
 
-# 13. Error Isolation
+# 15. Error Isolation
 
 Failure of one module must not invalidate unrelated completed work.
 
@@ -297,7 +369,7 @@ Cases requiring user intervention should use Review Queue where appropriate.
 
 ---
 
-# 14. Cancellation
+# 16. Cancellation
 
 A user should be able to cancel a long-running module when the module can safely support cancellation.
 
@@ -311,7 +383,7 @@ Modules that cannot safely stop immediately may finish their current atomic oper
 
 ---
 
-# 15. Configuration
+# 17. Configuration
 
 Modules obtain configurable behaviour from the project configuration system rather than hard-coding collection-specific paths or assumptions.
 
@@ -332,7 +404,7 @@ A module should not infer architectural meaning from directory names such as `TO
 
 ---
 
-# 16. Access and Filesystem Operations
+# 18. Access and Filesystem Operations
 
 A module may inspect or modify files only within the scope permitted by its configuration and the applicable Directory Access Policy.
 
@@ -344,7 +416,7 @@ The detailed access policy is defined by the project-wide Directory Access Polic
 
 ---
 
-# 17. Module Ownership
+# 19. Module Ownership
 
 Each module has a defined responsibility and owns the outputs that belong to that responsibility.
 
@@ -373,7 +445,7 @@ User decisions remain user-owned information and must not be silently overwritte
 
 ---
 
-# 18. Module Categories
+# 20. Module Categories
 
 Module categories are organizational labels, not execution dependencies.
 
@@ -427,7 +499,7 @@ Categories may be changed or extended without changing the execution model.
 
 ---
 
-# 19. Extensibility
+# 21. Extensibility
 
 Adding a module should normally require:
 
@@ -445,7 +517,7 @@ For example, a new module may reveal the need for a new shared logging or databa
 
 ---
 
-# 20. Reproducibility
+# 22. Reproducibility
 
 Where practical, a module should produce results that can be explained and reproduced from:
 
@@ -461,7 +533,7 @@ Execution records should contain enough information to identify which module ver
 
 ---
 
-# 21. Logging
+# 23. Logging
 
 Every module must produce logs according to DOC-011.
 
@@ -478,7 +550,7 @@ Module-specific logging requirements belong to the module's own specification.
 
 ---
 
-# 22. Relationship with Module Interface
+# 24. Relationship with Module Interface
 
 DOC-007 defines the common execution architecture.
 
@@ -500,7 +572,7 @@ DOC-007 must not duplicate the detailed interface fields defined by DOC-010.
 
 ---
 
-# 23. Relationship with Configuration Manager
+# 25. Relationship with Configuration Manager
 
 DOC-008 defines configuration management.
 
@@ -510,15 +582,18 @@ The execution engine itself does not become the owner of collection definitions 
 
 ---
 
-# 24. Acceptance Criteria
+# 26. Acceptance Criteria
 
 The module architecture is considered correctly implemented when:
 
-* modules can be executed independently;
+* the Scanner can establish database file records for newly discovered files;
+* ordinary modules can use those database records without requiring the Scanner process to remain running;
+* modules can be executed independently of one another;
 * the user controls execution under the current architecture;
 * modules do not require another module process to remain active;
 * modules do not communicate directly with other modules;
 * persistent inter-module information is exchanged through the shared database;
+* repeated executions of one module do not require repeated executions of another module;
 * execution state is visible to the user;
 * executions are recorded appropriately;
 * failures do not unnecessarily invalidate unrelated completed work;
