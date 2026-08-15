@@ -6,427 +6,481 @@
 
 **Document:** DOC-010
 
-**Version:** 1.0
+**Version:** 2.0
 
-**Status:** Design Specification
+**Status:** Draft
+
+**Depends on:**
+
+DOC-003
+DOC-005
+DOC-007
+DOC-008
+DOC-011
+DOC-012
+DOC-013
 
 ---
 
 # 1. Purpose
 
-This document defines the standard interface implemented by every module within the AI Image Collection Management System.
+This document defines the common interface contract for project modules.
 
-The goal is to ensure consistency between existing and future modules while minimizing duplicated design effort.
+It specifies the information and behaviour that a module exposes to the surrounding application and to the user interface. It does not define the internal algorithm of a module.
 
-Every module should conform to this specification unless explicitly documented otherwise.
-
----
-
-# 2. Design Philosophy
-
-Each module is an independent executable component.
-
-Modules are loosely coupled.
-
-The database is the only communication medium between modules.
-
-A module performs one clearly defined responsibility.
+DOC-007 defines the common module execution architecture. DOC-010 defines the common interface contract used by individual module specifications.
 
 ---
 
-# 3. Standard Module Lifecycle
+# 2. Module Independence
 
-Every module follows the same high-level execution flow.
+A module is an independently executable component with a clearly defined primary responsibility.
 
-```text id="6k5qcm"
-Start
+Modules do not communicate directly with one another. Persistent information exchanged between modules is exchanged through the project database.
 
-↓
+A module may use the filesystem, operating-system facilities, libraries, GPU resources and other resources required for its own work. These are not considered direct module-to-module communication.
 
-Load Configuration
+---
 
-↓
+# 3. Required Module Information
 
-Validate Environment
+Every module should expose, at minimum:
 
-↓
-
-Open Database
-
-↓
-
-Read Required Data
-
-↓
-
-Process
-
-↓
-
-Write Results
-
-↓
-
-Write Log
-
-↓
-
-Exit
+```text
+Module ID
+Module Name
+Module Version
+Description
+Category
 ```
 
-Modules may omit unnecessary stages, but the overall lifecycle remains the same.
+The exact representation is implementation-specific.
+
+An optional author or maintainer field may be provided but is not required for functional operation.
 
 ---
 
-# 4. Initialization
+# 4. Initialization Contract
 
-During startup, a module should:
+When a module starts, it shall perform the initialization checks required for safe execution.
 
-* load its configuration;
-* verify required directories;
-* verify database accessibility;
-* verify compatibility with the current database schema;
-* prepare internal resources.
+Depending on the module, these may include:
 
----
+* loading configuration;
+* validating configuration;
+* validating the selected collection or processing scope;
+* checking required directories;
+* checking database accessibility;
+* checking database/schema compatibility;
+* preparing required resources;
+* determining the module version/rule/model version applicable to the run.
 
-# 5. Input
+A module must fail clearly rather than start unsafe processing when a required precondition is not satisfied.
 
-A module may obtain data from:
-
-* Configuration Manager;
-* Project Database;
-* Collection Definition;
-* user-selected files or directories.
-
-Modules never obtain data directly from another module.
+Modules may omit checks that are irrelevant to their operation.
 
 ---
 
-# 6. Output
+# 5. Input Contract
 
-A module may produce:
+Each module specification shall document its required inputs.
 
-* database observations;
+Inputs may include:
+
+* project database state;
+* configuration;
+* collection definitions;
+* filesystem content within the permitted scope;
+* user-selected files or directories;
+* module-specific resources.
+
+A module must not require another module process to be running in order to obtain data from it.
+
+Where a module depends on the results produced by another module, that dependency is expressed as a database data requirement.
+
+---
+
+# 6. Output Contract
+
+Each module specification shall document the outputs it may produce.
+
+Outputs may include:
+
+* database records owned by the module;
+* updates to filesystem state when explicitly permitted;
 * log entries;
 * reports;
-* generated files;
-* exported data.
+* exported data;
+* generated support files.
 
-Modules never write results directly into another module.
+A module must not silently create side effects outside its documented responsibility.
 
 ---
 
 # 7. Database Ownership
 
-Every module owns only its own observations.
+A module owns the analysis or operational data it is explicitly responsible for producing.
 
 Examples:
 
+```text
 Scanner
-
-* SHA512
-* file metadata
+    filesystem discovery and file-state synchronization
 
 Universe Analysis
-
-* universe observations
+    universe analysis results
 
 Character Analysis
-
-* character observations
+    character analysis results
 
 Theme Analysis
+    theme analysis results
 
-* theme observations
+File Renamer
+    permitted filename modifications
+```
 
-A module shall never modify data owned by another module.
+A module must not silently overwrite results owned by another module or user decisions.
+
+The logical database model is defined by DOC-005.
 
 ---
 
-# 8. Configuration
+# 8. File Identity
 
-Every configurable parameter must be obtained from Configuration Manager.
+Modules shall use the project's File Identity Model when referring to files.
 
-Modules shall not contain hardcoded user settings.
+SHA512 is the logical identifier of the binary content of a file. `file_id`, where used, is an internal technical database identifier.
 
-Examples:
+Modules must not use filename or path as the primary identity of a file.
+
+Renaming or moving a file does not change its SHA512 identity.
+
+If the file's binary content changes and therefore its SHA512 changes, the module must treat the resulting binary object according to DOC-012 rather than silently continuing to treat it as the previous binary object.
+
+---
+
+# 9. Configuration
+
+Configurable parameters shall be obtained from the project configuration system rather than hard-coded into the module.
+
+Examples include:
 
 * thresholds;
-* thread count;
-* directories;
-* cache size.
+* worker-thread counts;
+* processing limits;
+* paths and roots;
+* access policies;
+* model settings;
+* cache limits;
+* reporting options.
+
+Configuration ownership is defined by DOC-008 and applicable collection configuration documents.
+
+A module must not infer functional meaning from a physical directory name such as `TODO`, `AI`, `FINAL`, `Anime` or `Themes`.
 
 ---
 
-# 9. Logging
+# 10. Collection Scope
 
-Every module shall generate logs.
+When a module operates on a collection, the scope shall be obtained from the configured Collection Definition rather than hard-coded paths.
 
-Minimum events:
+A module specification shall document which logical root roles it accepts, for example:
 
-* module started;
-* module finished;
-* warning;
-* error.
+```text
+SOURCE
+TRANSITION
+FINAL
+```
 
-Verbose logging is optional.
+and which operations it is allowed to perform within those roots.
 
----
-
-# 10. User Interface
-
-Every module should expose a consistent interface.
-
-Recommended information:
-
-* module name;
-* version;
-* short description;
-* execution status;
-* progress indication.
+The physical locations of the roots are defined by collection configuration.
 
 ---
 
-# 11. Execution Status
+# 11. Access Policy
 
-A module should report its current state.
+Filesystem operations are subject to the configured Directory Access Policy and the module's own permitted operations.
 
-Recommended states:
+The module interface must make clear which operations the module may request, such as:
 
-Idle
+```text
+READ
+RENAME
+MOVE
+CREATE
+DELETE
+```
 
-Running
+The module must not assume that `FINAL` is inherently immutable. A final tree may contain historical classification errors and may require a controlled correction workflow.
 
-Completed
+At the same time, a module must not autonomously perform corrective changes merely because it believes a file is misplaced when the applicable workflow requires user review.
 
-Completed with warnings
-
-Failed
-
-Cancelled
+The detailed Directory Access Policy is defined by the project-wide access-policy specification.
 
 ---
 
-# 12. Progress Reporting
+# 12. Execution State
 
-Long-running modules should provide progress information.
+A module shall expose a user-visible execution state while running.
 
-Recommended methods:
+The logical state set includes:
 
-* progress bar;
+```text
+STARTING
+RUNNING
+COMPLETED
+COMPLETED_WITH_WARNINGS
+CANCELLED
+FAILED
+```
+
+An implementation may use additional internal states.
+
+The user interface must make the current state understandable without requiring inspection of technical logs.
+
+---
+
+# 13. Progress Reporting
+
+A module should report progress when meaningful progress can be measured.
+
+Possible information includes:
+
 * percentage;
 * processed item count;
+* total item count when known;
+* current operation;
 * activity indicator.
 
-The goal is to inform the user that the module is actively working.
+When reliable percentage progress cannot be calculated, a useful activity indicator and current-operation status are sufficient.
 
 ---
 
-# 13. Error Handling
+# 14. Cancellation
 
-A module should recover gracefully whenever possible.
+A long-running module should support user cancellation when this can be implemented safely.
 
-Recoverable errors:
+Cancellation should:
 
-* unreadable image;
-* corrupted metadata;
-* unsupported format.
+* stop new work where possible;
+* preserve already completed valid work;
+* leave the database and filesystem in a consistent state;
+* record the execution as cancelled rather than completed.
 
-Fatal errors:
+A module may finish the current safe/atomic operation before terminating.
 
-* missing database;
+---
+
+# 15. Logging
+
+Every module shall log its execution according to DOC-011.
+
+At minimum, logs should make it possible to determine:
+
+* that execution started;
+* what module/version was running;
+* the significant operations performed;
+* warnings and errors;
+* whether execution completed, failed or was cancelled;
+* whether user intervention is required.
+
+Module-specific log details belong in the module specification.
+
+---
+
+# 16. Error Handling
+
+A module shall distinguish between errors that can be handled locally and errors that prevent safe continuation.
+
+Examples of recoverable conditions may include:
+
+* unreadable individual image;
+* unsupported file encountered during scanning;
+* malformed optional metadata.
+
+Examples of execution-blocking conditions may include:
+
+* unavailable required database;
 * incompatible schema;
-* invalid configuration.
+* invalid required configuration;
+* missing mandatory processing root.
 
-Fatal errors terminate only the current module.
+An error in one module must not invalidate unrelated completed work performed by other modules.
 
-Other modules remain unaffected.
-
----
-
-# 14. Memory Usage
-
-Modules may use RAM as working memory.
-
-Memory consumption should be adaptive rather than fixed.
-
-Modules should use available RAM when it significantly improves performance while leaving sufficient resources for the operating system.
-
-Modules should avoid retaining unnecessary data after processing.
+Cases requiring a user decision should use the Review Queue mechanism where applicable.
 
 ---
 
-# 15. Parallel Processing
+# 17. Memory and Resource Usage
 
-A module may internally use multiple threads.
+Modules may use available RAM and other local resources where this provides a meaningful performance benefit.
 
-Thread management is an implementation detail.
+Resource usage should be adaptive rather than artificially restricted to a minimal footprint.
 
-The number of worker threads should be configurable.
+Modules must avoid exhausting system resources and should release memory/resources that are no longer useful.
+
+Detailed resource limits may be configurable through DOC-008 or module-specific configuration.
 
 ---
 
-# 16. Restart Behaviour
+# 18. Parallel Processing
+
+A module may internally use multiple worker threads or processes where beneficial.
+
+Parallelism is an implementation detail unless the module specification exposes it as a configuration option.
+
+When exposed, worker counts should be configurable.
+
+Parallel execution must not violate database or filesystem consistency rules.
+
+---
+
+# 19. Repeated Execution and Reprocessing
 
 Modules may be executed repeatedly.
 
-Repeated execution is always initiated by the user.
+A module must not assume that it runs only once.
 
-Modules should not assume they are executed only once.
+Where possible, it should use existing database state to avoid unnecessary work.
+
+The decision to rerun remains under user control under the current architecture.
+
+Detailed reprocessing rules, including analysis-version invalidation, belong to the relevant module specification and future reprocessing architecture.
 
 ---
 
-# 17. Dependency Declaration
+# 20. Input/Output Documentation
 
-Every module should document its recommended inputs.
+Each module document shall clearly define:
+
+* what it reads from the database;
+* what it writes to the database;
+* what files it may inspect;
+* what filesystem operations it may perform;
+* what reports it produces;
+* what generated files it may create;
+* what user decisions it may require.
+
+There must be no undocumented operational side effects.
+
+---
+
+# 21. Module Interface vs Module Specification
+
+DOC-010 defines common requirements that apply to modules generally.
+
+An individual module document defines the module-specific behaviour.
+
+For example:
+
+```text
+DOC-010
+    Module must report execution state.
+
+DOC-101
+    Scanner reports scan progress by discovered file count.
+```
+
+The module specification may strengthen or narrow a generic rule when necessary, provided the exception is explicitly documented and does not contradict a higher-level safety or architectural requirement.
+
+---
+
+# 22. Dependency Declaration
+
+Each module shall document its meaningful data dependencies.
 
 Example:
 
+```text
 Scanner
-
-Inputs:
-
-Filesystem
-
-Outputs:
-
-Facts
+    Input: filesystem
+    Output: file state / SHA512
 
 Universe Analysis
-
-Inputs:
-
-Facts
-
-Outputs:
-
-Universe Observations
+    Input: files + relevant analysis data
+    Output: universe classification
 
 Character Analysis
+    Input: files + relevant universe information
+    Output: character classification
+```
 
-Inputs:
+These dependencies describe data requirements only.
 
-Facts
-
-Universe Observations
-
-Outputs:
-
-Character Observations
-
-This dependency description is informational only.
-
-Execution order is never enforced.
+They do not create direct module-to-module process dependencies or enforce global execution order.
 
 ---
 
-# 18. Generated Data
+# 23. Module Categories
 
-Every module should clearly define:
+Categories are organizational labels and do not define execution dependencies.
 
-* which database tables it reads;
-* which tables it writes;
-* which reports it generates;
-* which files it creates.
+Examples include:
 
-No hidden side effects should exist.
-
----
-
-# 19. Module Metadata
-
-Each module should expose basic metadata.
-
-Recommended fields:
-
-* Module Name
-* Module ID
-* Version
-* Description
-* Category
-* Author (optional)
-
----
-
-# 20. Categories
-
-Current categories include:
-
+```text
 Infrastructure
-
 Analysis
+Processing
+Maintenance / Validation
+```
 
-Maintenance
-
-Additional categories may be introduced in future versions.
+Future categories may be introduced when useful.
 
 ---
 
-# 21. Extensibility
+# 24. Extensibility
 
-Adding a new module should require only:
+Adding a new module should normally require:
 
 * implementing the module;
-* defining its configuration;
-* documenting its inputs and outputs.
+* defining its interface metadata;
+* defining configuration requirements;
+* documenting inputs and outputs;
+* registering it with the application where required.
 
-Existing modules should not require modification.
+Existing modules should not require modification merely because an unrelated module was added.
 
----
-
-# 22. Design Principles
-
-Every module should:
-
-* perform one responsibility;
-* remain independent;
-* communicate only through the database;
-* support repeated execution;
-* generate logs;
-* expose execution status;
-* respect user decisions;
-* follow the common lifecycle defined in this document.
+This does not prevent updates to shared standards when a genuinely new architectural requirement affects multiple modules.
 
 ---
 
-# 23. Acceptance Criteria
+# 25. Interface Compliance
 
-A module is considered compliant with this specification when:
+A module is compliant with DOC-010 when its specification and implementation provide, as applicable:
 
-* it follows the standard lifecycle;
-* it uses Configuration Manager;
-* it communicates exclusively through the database;
-* it logs its activity;
-* it reports execution status;
-* it documents its inputs and outputs;
-* it does not interfere with the internal operation of other modules.
+* identifiable module metadata;
+* safe initialization and validation;
+* documented inputs and outputs;
+* access to configuration through the common configuration system;
+* conformance to the File Identity Model;
+* visible execution status;
+* appropriate progress information;
+* cancellation handling where supported;
+* logging according to DOC-011;
+* isolation of module errors;
+* respect for database ownership and user decisions;
+* operation within the configured collection scope and access policy.
 
+Not every module needs every optional feature. The module's own specification determines which interface elements are applicable.
 
-# 24. Applicability
+---
 
-This specification applies to all modules developed after the publication of DOC-010.
+# 26. Relationship with Other Documents
 
-Modules documented prior to DOC-010:
+```text
+DOC-003  System Architecture
+DOC-005  Database Schema
+DOC-007  Module Execution and Architecture
+DOC-008  Configuration Manager
+DOC-011  Logging Standard
+DOC-012  File Identity Model
+DOC-013  Review Queue
+```
 
-DOC-101
-DOC-102
-DOC-103
-DOC-104
-DOC-105
-DOC-105A
-DOC-106
-DOC-107
-DOC-108
-DOC-201
-DOC-301
-DOC-401
+DOC-010 must not redefine the detailed rules owned by those documents.
 
-were developed before this specification was formalised.
-
-These modules shall nevertheless be considered compliant with DOC-010, as this document formalises the architectural conventions established during their development.
-
-Future revisions of those documents are not required solely for the purpose of referencing DOC-010.
 ---
 
 # End of DOC-010
