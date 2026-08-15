@@ -6,7 +6,7 @@
 
 **Document:** DOC-010
 
-**Version:** 2.0
+**Version:** 2.1
 
 **Status:** Draft
 
@@ -37,6 +37,23 @@ DOC-007 defines the common module execution architecture. DOC-010 defines the co
 A module is an independently executable component with a clearly defined primary responsibility.
 
 Modules do not communicate directly with one another. Persistent information exchanged between modules is exchanged through the project database.
+
+Modules therefore have **no required execution sequence relative to one another**. One module may be executed many times while another module is not executed at all, and a module may be started again after other modules have run.
+
+For example, the following is valid:
+
+```text
+Day 1–10:
+    IRL Analysis × 5
+
+    Screenshot Analysis × 2
+
+    IRL Analysis × 1
+```
+
+The final IRL execution is not a continuation of a process owned by Screenshot Analysis. It is an independent execution that reads the current database state available to it.
+
+A module may benefit from information previously written by another module, but the producing module does not need to be running and the consuming module does not depend on the producer's execution history except where explicitly required as a data prerequisite.
 
 A module may use the filesystem, operating-system facilities, libraries, GPU resources and other resources required for its own work. These are not considered direct module-to-module communication.
 
@@ -96,7 +113,7 @@ Inputs may include:
 
 A module must not require another module process to be running in order to obtain data from it.
 
-Where a module depends on the results produced by another module, that dependency is expressed as a database data requirement.
+Where a module depends on results produced by another module, that dependency is expressed as a database data requirement.
 
 ---
 
@@ -115,9 +132,11 @@ Outputs may include:
 
 A module must not silently create side effects outside its documented responsibility.
 
+Modules shall write persistent information that may be useful to other modules to the shared database. Such information becomes available to other modules through the database without requiring direct communication between the modules.
+
 ---
 
-# 7. Database Ownership
+# 7. Database Ownership and Shared Information
 
 A module owns the analysis or operational data it is explicitly responsible for producing.
 
@@ -139,6 +158,8 @@ Theme Analysis
 File Renamer
     permitted filename modifications
 ```
+
+A module may create information intended for use by other modules. Other modules may read that information from the database, provided the relevant data contract is documented.
 
 A module must not silently overwrite results owned by another module or user decisions.
 
@@ -339,7 +360,19 @@ Parallel execution must not violate database or filesystem consistency rules.
 
 # 19. Repeated Execution and Reprocessing
 
-Modules may be executed repeatedly.
+Modules may be executed repeatedly and independently of other modules.
+
+The number and timing of executions of one module do not determine when another module may execute.
+
+For example:
+
+```text
+IRL Analysis × 5
+Screenshot Analysis × 2
+IRL Analysis × 1
+```
+
+is a valid execution history. The later IRL run reads the current database state and may use information previously written by Screenshot Analysis, without requiring Screenshot Analysis to run again or remain active.
 
 A module must not assume that it runs only once.
 
@@ -461,7 +494,8 @@ A module is compliant with DOC-010 when its specification and implementation pro
 * logging according to DOC-011;
 * isolation of module errors;
 * respect for database ownership and user decisions;
-* operation within the configured collection scope and access policy.
+* operation within the configured collection scope and access policy;
+* independent execution without requiring another module process to run.
 
 Not every module needs every optional feature. The module's own specification determines which interface elements are applicable.
 
