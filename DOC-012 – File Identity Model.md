@@ -62,7 +62,7 @@ If a new binary version receives a new SHA512 and therefore a new file record, i
 
 # 5. SHA512 as the File Key
 
-SHA512 shall be unique within the active file identity space.
+SHA512 is the logical primary key of binary file identity.
 
 The database must not silently overwrite the SHA512 of an existing record when binary content changes.
 
@@ -89,11 +89,11 @@ This rule preserves the identity and analysis history of distinct binary version
 During scanning or filesystem synchronization, the Scanner shall:
 
 1. calculate SHA512 reliably;
-2. search for a record with the same SHA512;
-3. determine whether that record is currently active or archived;
+2. search for the corresponding SHA512 record;
+3. determine its current lifecycle state;
 4. update the record and filesystem state as appropriate.
 
-If the same SHA512 already exists in an archived record and the binary content is encountered again unchanged, the existing identity may be restored to `ACTIVE` rather than creating a second identity for the same binary content, provided the corresponding record still exists.
+If the same SHA512 already exists in an archived record and the unchanged binary content is encountered again, the existing record may be restored to `ACTIVE` rather than creating a second logical identity, provided that the archived record is still retained.
 
 If the SHA512 does not exist in the database, a new record shall be created.
 
@@ -384,3 +384,21 @@ The primary identity of a binary file is its SHA512.
 A filename, directory or storage location does not define file identity.
 
 If binary content changes, SHA512 changes and the database must represent that content as a new file record rather than modifying the identity of the old record.
+
+---
+
+# 22. Consistency with Module Processing
+
+The File Identity Model does not require every module to process every file at the same time.
+
+Once Scanner has created a valid file record, other modules may process that file independently according to their own configured scope and execution schedule.
+
+For a given module and file, the absence of that module's result may mean, among other things:
+
+* the module has not yet been run for that file;
+* the file was outside the module's processing scope when that execution occurred;
+* the file was skipped;
+* processing failed;
+* the module deliberately does not produce a result for that file.
+
+The existence and validity of a module result must therefore be represented explicitly rather than inferred solely from the absence of a record.
