@@ -4,123 +4,104 @@
 
 This document defines how image files are uniquely identified within the project.
 
-Its purpose is to establish a deterministic and consistent model for tracking files throughout their lifecycle, regardless of their physical location within the managed collection.
+Its purpose is to establish a deterministic and consistent model for tracking binary file versions throughout their lifecycle, regardless of physical location.
 
-The rules defined in this document shall be used by all modules interacting with the database.
+The rules defined here apply to all modules that reference files in the database.
 
 ---
 
 # 2. Design Philosophy
 
-The project manages **files**, not folders.
+The project manages files independently of their names and locations.
 
-Folders, filenames and directory structures may change over time.
+Folders, filenames and directory structures may change over time without changing the identity of an unchanged binary file.
 
 The binary content of a file is the primary identity of that file within the project.
 
-The project's logical file key is the SHA512 hash of the binary content.
+The project's logical file key is the **SHA512 hash of the binary content**.
 
-An internal `file_id` may be used as a technical database surrogate for efficient foreign-key relationships, but it is not an alternative file identity. It belongs to the database record representing a particular SHA512 value.
+An internal `file_id` may be used as a technical database surrogate for relationships and implementation convenience. It does not replace SHA512 as file identity.
 
 ---
 
-# 3. File Identity
+# 3. Primary File Identity
 
-Each database record represents one specific binary version of one image.
-
-The primary logical identifier is:
+The primary logical identifier of a binary file version is:
 
 ```text
 SHA512
 ```
 
-SHA512 identifies the exact binary content represented by the record.
+The project assumes that identical SHA512 values represent identical binary content.
 
-The project assumes that identical SHA512 values represent identical binary content. Accidental SHA512 collisions are considered outside the normal operating model for the intended collection size.
+A SHA512 collision is considered outside the normal operating model for the intended collection size. If inconsistent behaviour involving SHA512 is detected, it is treated as an integrity problem rather than as a normal file lifecycle case.
 
-`file_id` is an internal database identifier. It may be referenced by other tables, but it does not replace SHA512 as the identity of the file content.
+---
 
-The important distinction is:
+# 4. Internal Database Identifier
+
+A database implementation may assign:
 
 ```text
-SHA512
-    = logical identity of the binary file content
-
 file_id
-    = internal database reference to the corresponding record
 ```
+
+`file_id` is an internal technical identifier for relationships between tables and other implementation purposes.
+
+It is:
+
+* assigned when the corresponding database record is created;
+* unique within the database;
+* never reused while the record is retained;
+* independent of filename and directory;
+* not an alternative definition of file identity.
+
+If a new binary version receives a new SHA512 and therefore a new file record, it receives a new `file_id` where `file_id` is used.
 
 ---
 
-# 4. SHA512 as Primary File Key
+# 5. SHA512 as the File Key
 
-SHA512 shall be unique among active file records.
+SHA512 shall be unique within the active file identity space.
 
-The database should treat SHA512 as the primary logical key for identifying a binary file version.
+The database must not silently overwrite the SHA512 of an existing record when binary content changes.
 
-If the same binary file is encountered again under another filename or path, its SHA512 remains unchanged and the existing record is reused.
-
-If SHA512 changes, the system is no longer dealing with the same binary file version.
-
-The database record representing the previous SHA512 must therefore not simply have its SHA512 field overwritten while retaining the old file identity.
-
-Instead:
+Example:
 
 ```text
-old SHA512
-    ↓
-old file record
-    ↓
-ARCHIVED / historical state
+Before:
+SHA512 = AAAA
+file_id = 15
 
-new SHA512
-    ↓
-new file record
-    ↓
-ACTIVE
+After binary modification:
+SHA512 = BBBB
+file_id = 16
 ```
 
-The new binary content receives a new internal `file_id` if `file_id` is used by the implementation.
+The old record remains associated with `AAAA` and may become `ARCHIVED`. The new record represents `BBBB`.
 
-This preserves the identity and history of both binary versions.
-
----
-
-# 5. Active Record Detection
-
-During scanning or filesystem synchronization the Scanner shall:
-
-1. calculate SHA512;
-2. search for an active record with the same SHA512.
-
-If such a record exists:
-
-* update its current path if necessary;
-* update file metadata if necessary;
-* refresh its `last_seen` timestamp;
-* retain the same SHA512;
-* retain the same internal `file_id`, where one is used.
-
-No new file record shall be created merely because the filename or directory changed.
+This rule preserves the identity and analysis history of distinct binary versions.
 
 ---
 
-# 6. New Record Creation
+# 6. Active Record Detection
 
-If no active record exists with the calculated SHA512:
+During scanning or filesystem synchronization, the Scanner shall:
 
-* a new file record shall be created;
-* a new internal `file_id` shall be assigned if the implementation uses one;
-* SHA512 shall be stored as the logical file key;
-* status shall be set to `ACTIVE`.
+1. calculate SHA512 reliably;
+2. search for a record with the same SHA512;
+3. determine whether that record is currently active or archived;
+4. update the record and filesystem state as appropriate.
 
-This applies regardless of filename or directory.
+If the same SHA512 already exists in an archived record and the binary content is encountered again unchanged, the existing identity may be restored to `ACTIVE` rather than creating a second identity for the same binary content, provided the corresponding record still exists.
+
+If the SHA512 does not exist in the database, a new record shall be created.
 
 ---
 
 # 7. Filename Changes
 
-Changing a filename does **not** change file identity.
+Changing a filename does not change file identity.
 
 Example:
 
@@ -134,97 +115,100 @@ to:
 /TODO/furina.jpg
 ```
 
-Since SHA512 remains unchanged:
+If SHA512 remains unchanged:
 
-* SHA512 remains the same;
+* SHA512 remains unchanged;
 * the same file record remains active;
-* only filesystem information such as `current_path` and `filename` is updated.
+* filesystem information such as `current_path` and `filename` is updated.
+
+All analysis results associated with the file remain associated with the same binary identity.
 
 ---
 
 # 8. File Relocation
 
-Moving a file between supported directories does **not** change file identity.
-
-Only filesystem state is updated.
+Moving a file between configured directories does not change file identity.
 
 Examples include:
 
 ```text
-TODO → AI
-AI → FINAL
-FINAL → AI
-AI → TODO
+SOURCE → TRANSITION
+TRANSITION → FINAL
+FINAL → TRANSITION
+TRANSITION → SOURCE
 ```
 
 provided the binary content remains unchanged.
+
+Only filesystem state changes.
 
 ---
 
 # 9. Binary Modification
 
-If the binary contents of a file change, its SHA512 changes.
+If the binary contents of a file change, the SHA512 changes.
 
 Examples include:
 
-* brightness adjustment;
-* contrast modification;
-* colour correction;
+* image editing;
 * resizing;
 * recompression;
-* metadata removal that changes file bytes;
-* image editing.
+* metadata changes that alter file bytes;
+* pixel modifications;
+* replacement with another binary file.
 
-In this situation the modified file shall be treated as a **new binary file version**.
+The modified binary is a new file identity.
 
-The previous SHA512 record is not overwritten with the new SHA512.
+The previous record is not rewritten with the new SHA512. A new record is created for the new SHA512.
 
-A new record shall be created for the new SHA512.
-
-The previous record may become `ARCHIVED` according to its actual filesystem state and the rules of the Scanner and Database Maintenance modules.
+The previous record may become `ARCHIVED` according to its actual filesystem state and the rules of Scanner and Database Maintenance.
 
 ---
 
 # 10. Duplicate Binary Files
 
-If two filesystem entries contain identical binary content, they have the same SHA512 and therefore represent the same logical file content.
+If multiple physical filesystem entries contain identical binary content, they have the same SHA512 and therefore the same logical file identity.
 
-The database must not create separate logical file identities merely because the files have different:
+Different:
 
 * filenames;
 * directories;
 * collection roots;
-* capitalization;
-* copy/duplicate suffixes.
+* copy/duplicate suffixes;
+* storage locations
 
-The filesystem may temporarily contain multiple physical references to the same binary content. Handling of such duplicates is a separate operational concern and does not change the SHA512-based identity model.
+do not create different binary identities when SHA512 remains identical.
+
+Handling of multiple physical copies is a separate operational concern and does not change this identity model.
 
 ---
 
 # 11. Archived Records
 
-A previously active record may become:
+A file record may become:
 
 ```text
 ARCHIVED
 ```
 
-when the corresponding binary file is no longer present in the managed filesystem according to the applicable scanner rules, or when a modified binary version replaces it.
+when the corresponding binary file is no longer present in the managed filesystem, or when a new binary version replaces it.
 
 Archived records:
 
 * retain their original SHA512;
-* retain their original `file_id`, if one was assigned;
+* retain their original `file_id`, if used;
 * retain their historical identity;
-* must not have their SHA512 overwritten with the SHA512 of another binary file.
+* must not have their SHA512 overwritten with another binary file's SHA512.
 
-Archived records may later be removed by Database Maintenance according to its retention rules.
+Archived records may later be removed by Database Maintenance according to its retention policy.
+
+If an archived record is still retained and the same unchanged SHA512 is encountered again, the record may return to `ACTIVE`.
 
 ---
 
 # 12. Record Lifecycle
 
-Typical lifecycle for one binary version:
+Typical lifecycle:
 
 ```text
 SHA512 A
@@ -248,36 +232,48 @@ SHA512 B
 new ACTIVE record
 ```
 
-The two SHA512 values represent two different binary file versions.
+If the original binary later reappears unchanged and its archived record still exists:
+
+```text
+SHA512 A
+   ↓
+ARCHIVED
+   ↓
+encountered again
+   ↓
+ACTIVE
+```
+
+No second logical identity is required for the same retained SHA512.
 
 ---
 
 # 13. Supported Path Changes
 
-The following operations update an existing record without changing file identity:
+The following operations update an existing record without changing binary identity:
 
 * filename change;
 * folder change;
 * AutoSort relocation;
 * Renamer execution;
-* user-approved migration/correction.
+* user-approved migration or correction.
 
-The condition is that the binary content remains unchanged and therefore SHA512 remains unchanged.
+The condition is that the binary content remains unchanged and SHA512 remains unchanged.
 
 ---
 
-# 14. Unsupported Identity Changes
+# 14. Identity-Changing Operations
 
-The following operations create a new binary file identity:
+The following create a new binary file identity whenever they change SHA512:
 
 * image editing;
 * recompression;
 * pixel modifications;
 * binary modifications;
 * replacement with another image;
-* any other operation that changes SHA512.
+* any other byte-level modification.
 
-The decisive criterion is the resulting SHA512.
+The decisive criterion is the resulting SHA512, not the type of operation that produced it.
 
 ---
 
@@ -296,28 +292,28 @@ Every active file record shall contain at minimum:
 
 An internal `file_id` may additionally be stored for relational database use.
 
-Additional analysis data such as Universe, Character, Themes and other module results are associated with the SHA512-based file record, normally through its internal `file_id` where one is used.
+Additional analysis and classification data are associated with the same SHA512-based file record, normally through its internal `file_id` where one is used.
 
 ---
 
 # 16. Record Status
 
-Minimum supported statuses include:
+At minimum, the identity model recognizes:
 
 ```text
 ACTIVE
 ARCHIVED
 ```
 
-Additional operational states such as `MISSING`, `DELETED` or `FAILED` may be introduced where required by Scanner or Database Maintenance specifications.
+Additional operational states such as `MISSING`, `DELETED` or `FAILED` may be introduced by Scanner or Database Maintenance without changing the underlying identity rules.
 
-A status must not change the identity of the underlying SHA512 value.
+A status change does not change the SHA512 identity of the binary record.
 
 ---
 
 # 17. SHA512 Calculation Failures
 
-If SHA512 cannot be calculated reliably, the system must not invent a placeholder value and must not treat the file as a valid new identity.
+If SHA512 cannot be calculated reliably, the system must not invent a placeholder value and must not create a valid new file identity from an unreliable result.
 
 Possible causes include:
 
@@ -331,19 +327,17 @@ The failure shall be logged according to DOC-011.
 
 Where appropriate, the case may enter Review Queue.
 
-The file must remain distinguishable from a successfully identified file until a valid SHA512 is obtained.
+The file remains distinguishable from a successfully identified file until a valid SHA512 is obtained.
 
 ---
 
 # 18. Integrity Principles
 
-The project assumes that accidental SHA512 collisions are practically impossible for the intended collection size.
+The project does not implement a normal collision-resolution workflow for SHA512.
 
-A SHA512 collision is therefore not treated as a normal operating scenario requiring an alternate identity system.
+If a SHA512 collision or other inconsistent hash behaviour is detected, it shall be treated as a software, hardware or database integrity problem.
 
-If inconsistent behaviour involving SHA512 is detected, it shall be treated as an internal software, hardware or database integrity problem.
-
-The system must not silently resolve such a conflict by assigning arbitrary replacement hashes.
+The system must not silently resolve such a case by inventing or substituting another hash.
 
 ---
 
@@ -356,17 +350,18 @@ In particular:
 * SHA512 is the logical primary key of binary file identity;
 * SHA512 must not be overwritten when binary content changes;
 * a changed SHA512 represents a new file record;
-* an internal `file_id`, if retained, is a technical surrogate and receives a new value for the new record;
+* an internal `file_id`, if retained, is a technical surrogate;
 * filenames and paths must never be used as the primary identity of a file.
 
 ---
 
 # 20. Relationship with Other Documents
 
-The following documents shall comply with the rules defined here:
+The following documents shall comply with the identity rules defined here:
 
 * DOC-005 – Database Schema
 * DOC-007 – Module Execution and Architecture
+* DOC-010 – Module Interface Specification
 * DOC-101 – Scanner Module
 * DOC-109 – Database Access
 * DOC-201 – AutoSort Engine
