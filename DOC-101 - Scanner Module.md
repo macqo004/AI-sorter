@@ -8,7 +8,7 @@
 
 **Module:** Scanner
 
-**Version:** 2.0
+**Version:** 2.1
 
 **Status:** Draft
 
@@ -86,19 +86,6 @@ Other modules
 The other modules do not need Scanner to remain running.
 
 After a file has a valid database record, other modules may be executed in any order and any number of times according to their own specifications.
-
-For example:
-
-```text
-Day 1–10:
-    Scanner
-    IRL Analysis × 5
-    Screenshot Analysis × 2
-    IRL Analysis × 1
-    B&W Analysis × 10
-```
-
-These are independent executions. The later executions use the current database state; no module process needs to remain active for another module.
 
 If new files are added to a configured source/root after the last Scanner execution, those files are not available to database-driven analysis modules until Scanner discovers them.
 
@@ -274,7 +261,8 @@ No current active record exists for the discovered SHA512.
 
 Action:
 
-* create the new file record;
+* if the SHA512 exists in an archived record that is still retained, reactivate that existing file identity rather than creating a second identity for the same binary content;
+* otherwise create the new file record;
 * assign an internal `file_id` if used;
 * store current filesystem state;
 * mark the record active.
@@ -534,6 +522,7 @@ Scanner is considered compliant when it can:
 
 * discover supported files within the configured scan scope;
 * create valid file identities using SHA512;
+* reactivate an existing retained archived record when the same unchanged SHA512 is rediscovered;
 * detect new, moved, renamed, modified and missing files where supported by the available filesystem information;
 * preserve identity across rename and move;
 * create a new identity when binary content changes;
