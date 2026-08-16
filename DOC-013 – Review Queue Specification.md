@@ -1,10 +1,6 @@
 # DOC-013 – Review Queue Specification
 
-**Project:** AI Image Collection Management System
-
-**Document:** DOC-013
-
-**Version:** 2.1
+**Version:** 2.2
 
 **Status:** Draft
 
@@ -203,27 +199,33 @@ Manual protection is applied to the relevant classification or placement context
 
 The configured Transition/AI workspace may be used as the physical working area for Review Queue cases involving files that can safely leave their current processing location.
 
-For a detected placement error in FINAL, the system may use an existing corresponding AI workspace, for example:
+AI is allowed to develop a working directory structure that does not yet exist in FINAL.
+
+When a module's configured confidence threshold is exceeded and its own specification permits automatic workspace organization, the module may create a new directory inside the AI/transition tree.
+
+Example:
 
 ```text
-FINAL/Anime/Winx Club/image.jpg
-        ↓
-AI/Ben 10/image.jpg
+AI
+└── Ben 10
+    └── image.jpg
 ```
 
-The AI location is a working proposal, not a final classification.
+The created AI directory is a working classification/proposal and does not become a FINAL collection merely because it exists.
 
-The user may then move the file to any appropriate existing FINAL destination or to an appropriate source/transition location according to the collection configuration.
+The user may later move the resulting files or the complete AI directory into an existing FINAL destination after review.
 
-If the user chooses a destination different from the automatic suggestion, that user-selected destination becomes the authoritative manual correction for the relevant placement/classification context.
+The user may also decide that the AI classification is incorrect and move the file elsewhere.
 
 ---
 
-# 11. Final Tree Destination Rules
+# 11. FINAL Tree Destination Rules
+
+FINAL is different from the AI/transition workspace.
 
 AI and analysis modules must not create new final collection directories merely because a model or rule produces a new classification.
 
-A final destination is valid for automatic placement only when the corresponding directory already exists and is defined in the Collection Definition.
+A final destination is valid for automatic placement only when the corresponding directory already exists and is represented by the Collection Definition.
 
 Example:
 
@@ -240,25 +242,56 @@ If a model reports:
 New Universe: Ben 10
 ```
 
-but no corresponding destination exists in the Collection Definition, the system shall not automatically create:
+but no corresponding FINAL destination exists in the Collection Definition, the system shall not create:
 
 ```text
 FINAL/Anime/Ben 10
 ```
 
-The result may instead remain in the database, be placed into the configured AI/transition workspace, or enter Review Queue according to the relevant module specification.
+automatically.
 
-This rule also applies to newly proposed subdirectories inside existing final trees.
+The result may instead be stored as analysis information, organized inside AI, or presented for user review according to the relevant module specification.
 
-The AI system is not a directory-creation mechanism for FINAL.
+FINAL structure is therefore user-defined. AI structure may be extended by qualifying automated workspace operations.
 
 ---
 
-# 12. Suggested Results Are Not Commands
+# 12. AI Directory Creation Rules
+
+Automatic directory creation is permitted in the AI/transition workspace only when:
+
+* the responsible module is explicitly allowed to create directories;
+* the destination is inside the configured AI/transition root;
+* the operation is consistent with the module's configured confidence threshold and classification rules;
+* the creation does not modify FINAL.
+
+A newly created AI directory does not need to exist in Collection Definition as a FINAL destination.
+
+This permits workflows such as:
+
+```text
+AI detects a new universe
+        ↓
+confidence exceeds threshold
+        ↓
+AI/Ben 10/ is created
+        ↓
+files are organized there
+        ↓
+user reviews the result
+        ↓
+user may move the entire folder to an existing FINAL tree
+```
+
+The user remains the authority over the eventual FINAL structure.
+
+---
+
+# 13. Suggested Results Are Not Commands
 
 A Review Queue suggestion is informational until the user resolves the case.
 
-Examples include:
+Suggestions may include:
 
 ```text
 Suggested universe: Ben 10
@@ -269,13 +302,15 @@ Suggested filename: furina.jpg
 
 A suggestion must never be treated as an automatic command merely because it has high confidence.
 
+The exception is an explicitly specified and permitted **AI/transition workspace operation**. Such an operation may automatically create AI directories or organize files within AI without creating a FINAL directory or silently overriding a user decision.
+
 ---
 
-# 13. Review of FINAL
+# 14. Review of FINAL
 
 FINAL contains user-accepted collection content but is not assumed to be permanently error-free.
 
-If a module detects a probable classification error inside FINAL, the module must not autonomously relocate the file solely on the basis of its analysis when user approval is required.
+If a module detects a probable classification or placement error inside FINAL, the module must not autonomously relocate the file solely on the basis of its analysis when user approval is required.
 
 The review representation may depend on the case.
 
@@ -299,11 +334,24 @@ Alternatively, where the collection workflow allows the file to be safely moved 
 
 ---
 
-# 14. Validation Before Applying a Decision
+# 15. Review of Source, Transition and Other Files
+
+For files in source/transition areas, the Review Queue may be represented by:
+
+* a working location in the AI workspace;
+* a report;
+* database review metadata;
+* another explicitly defined module workflow.
+
+The implementation should use the least complex mechanism that safely provides the user with the required decision context.
+
+---
+
+# 16. Validation Before Applying a Decision
 
 A decision affecting a file should be validated against the current filesystem and database state before the physical operation is performed.
 
-Where applicable, verify:
+At minimum, where applicable, the system should verify:
 
 ```text
 review case is still valid
@@ -316,35 +364,23 @@ requested destination is still permitted
 
 If the state has changed materially, the case should become `STALE` rather than blindly applying the old instruction.
 
+A user-selected destination that was already applied successfully is not subsequently considered stale merely because an automatic model proposes another destination. Manual decisions take precedence unless the user explicitly changes them.
+
 ---
 
-# 15. Review Queue and Module Independence
+# 17. Review Queue and Module Independence
 
 Creating a Review Queue case does not create a runtime dependency on another module.
 
-A module may create review cases and terminate. Another module may later read the resulting database state and continue its own independent execution.
+A module may create review cases and terminate.
 
-For example:
-
-```text
-IRL Analysis
-    ↓
-creates Review cases
-    ↓
-execution ends
-
-Screenshot Analysis
-    ↓
-runs later
-    ↓
-reads current database state
-```
+Another module may later read the resulting database state and continue its own independent execution.
 
 No review process or module needs to remain continuously active.
 
 ---
 
-# 16. Review Queue and File Identity
+# 18. Review Queue and File Identity
 
 Review cases involving a file should reference its SHA512-based identity and, where used, the internal `file_id`.
 
@@ -364,25 +400,17 @@ when the file content has changed.
 
 ---
 
-# 17. Duplicate and Repeated Review Cases
+# 19. Duplicate and Repeated Review Cases
 
 A module should avoid creating unlimited duplicate Review Queue entries for the same unresolved condition when practical.
 
-The implementation may recognize an equivalent open case using information such as:
+However, a new execution may legitimately create a new case when the underlying evidence or proposed action has materially changed.
 
-```text
-file identity
-module
-classification context
-operation
-current state
-```
-
-A new case is legitimate when the underlying evidence or proposed action has materially changed.
+Manual decisions are not to be treated as unresolved review cases simply because a later automatic analysis disagrees.
 
 ---
 
-# 18. Review and Automatic Reprocessing
+# 20. Review and Automatic Reprocessing
 
 A deferred or unresolved review case may be reconsidered by a later module execution according to the relevant module's reprocessing policy.
 
@@ -390,9 +418,11 @@ A resolved manual decision must not be silently replaced by later automatic proc
 
 A rejected automatic suggestion must not automatically become an accepted result merely because the same module is run again.
 
+The exact rules for reopening or re-evaluating cases belong to the relevant module and future reprocessing architecture.
+
 ---
 
-# 19. Logging
+# 21. Logging
 
 Creation, resolution, deferral, cancellation and staleness of Review Queue cases shall be logged according to DOC-011.
 
@@ -408,7 +438,7 @@ Logs should identify, where applicable:
 
 ---
 
-# 20. Export and Reporting
+# 22. Export and Reporting
 
 Review information may be exported for manual inspection.
 
@@ -426,11 +456,11 @@ Exports are representations of Review Queue information and are not themselves t
 
 ---
 
-# 21. Lifetime and Cleanup
+# 23. Lifetime and Cleanup
 
 Review Queue cases should remain available until they are resolved, deferred, cancelled or otherwise invalidated according to their status.
 
-Resolved and cancelled history may be retained for diagnostics.
+Resolved and cancelled history may be retained for auditability and diagnostics.
 
 Database Maintenance may define retention and cleanup rules.
 
@@ -438,55 +468,69 @@ The system must not silently delete an open or deferred review case merely becau
 
 ---
 
-# 22. Safety Principles
+# 24. Safety Principles
 
 The Review Queue follows these principles:
 
 * uncertain decisions should be sent to the user rather than guessed;
 * suggestions are not commands;
-* user decisions have priority over later automatic results for the affected classification context;
+* user decisions have priority over later automatic results for the affected classification or placement context;
 * physical operations require validation before execution;
+* AI may be automatically extended as a working area when the relevant module and threshold permit it;
+* FINAL structure is user-defined and must not be extended automatically;
 * Review Queue cases do not modify files by themselves;
 * FINAL may be reviewed without being treated as infallible;
 * migration is handled as a possible review outcome, not as a separate Migration Queue system;
-* independent modules may continue operating without waiting for a review case to be resolved;
-* final destinations are never invented by AI/analysis modules and must come from Collection Definition or explicit user action.
+* independent modules may continue operating without waiting for a review case to be resolved unless their own specification explicitly requires otherwise.
 
 ---
 
-# 23. Relationship with Other Documents
+# 25. Relationship with Collection Definition
 
-```text
-DOC-005  Database Schema
-DOC-008  Configuration Manager
-DOC-010  Module Interface Specification
-DOC-011  Logging Standard
-DOC-012  File Identity Model
-DOC-301  Collection Definition Wizard
-DOC-302  Collection Definition Format
-```
+Review Queue does not define FINAL directory structure.
 
-DOC-013 defines the common review mechanism. Module-specific criteria for creating a review item remain in the relevant module specification.
+Collection Definition defines the existing configured FINAL destinations and the logical collection structure used by modules.
+
+AI/transition directories created by an explicitly permitted module operation are working directories and do not require pre-existence in the FINAL Collection Definition.
+
+Collection Definition and traversal behaviour are defined by DOC-301 and DOC-302.
 
 ---
 
-# 24. Acceptance Criteria
+# 26. Future Extensions
 
-The Review Queue is compliant when:
+The current Review Queue can later support:
+
+* graphical review interfaces;
+* batch decisions;
+* advanced filtering and search;
+* module-specific review panels;
+* richer review history;
+* automatic revalidation of stale cases;
+* integration with a future reprocessing manager.
+
+Such extensions must preserve user authority, file identity and the distinction between AI workspace expansion and FINAL structure.
+
+---
+
+# 27. Acceptance Criteria
+
+The Review Queue is considered compliant when:
 
 * uncertain or user-sensitive cases can be represented consistently;
 * each persistent case has a unique identifier;
 * the affected file can be identified using SHA512-based identity;
 * user decisions support ACCEPT, REJECT, MODIFY and DEFER;
 * suggestions are not executed automatically merely because they exist;
-* manual corrections cannot be silently overwritten by later automatic processing for the same classification/placement context;
+* explicitly permitted AI/transition workspace operations may create new AI directories when their configured threshold/rules are satisfied;
+* FINAL directories are not created automatically by analysis modules;
+* user-selected destinations become authoritative for the affected placement/classification context;
+* manual corrections cannot be silently overwritten by later automatic processing;
 * review cases can be represented in the AI/transition workspace where appropriate;
-* FINAL review can be represented without automatically modifying FINAL;
 * stale decisions are detected before unsafe operations are applied;
 * Review Queue does not require a separate Migration Queue;
 * Review Queue activity is logged;
-* review handling does not introduce runtime dependencies between otherwise independent modules;
-* AI/analysis modules do not automatically create new final collection directories.
+* review handling does not introduce runtime dependencies between otherwise independent modules.
 
 ---
 
