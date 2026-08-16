@@ -1,297 +1,430 @@
-DOC-103
-Screenshot Analysis Module
+# DOC-103
 
-Project: AI Image Framework (working title)
+# Screenshot Analysis Module
 
-Document: DOC-103
+**Project:** AI Image Collection Management System
 
-Module: Screenshot Analysis
+**Document:** DOC-103
 
-Version: 1.0 Draft
+**Module:** Screenshot Analysis
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-DOC-101
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
 
-The Screenshot Analysis module determines whether an image is likely to represent a screenshot.
+---
 
-The module enriches the database with screenshot-related observations.
+# 1. Purpose
 
-The module performs no file operations and makes no sorting decisions.
+The Screenshot Analysis module determines whether an image contains characteristics consistent with a screenshot or captured screen content.
 
-2. Responsibilities
+The module enriches the shared database with screenshot-related analysis results.
 
-The module SHALL:
+It does not move or rename files, create final collection directories, or make sorting decisions.
 
-analyse images for screenshot characteristics;
-analyse filenames for screenshot indicators;
-detect visible user interface elements;
-store screenshot-related observations;
-assign a confidence value to each observation.
+---
 
-The module SHALL NOT:
+# 2. Module Responsibility
 
-move files;
-rename files;
-classify anime;
-classify characters;
-detect memes;
-determine image quality;
-modify observations created by other modules.
-3. Scope
+The module is responsible for analysing evidence associated with screenshot-like content, including:
 
-The module evaluates only evidence related to screenshots.
+* visible user-interface elements;
+* game HUD elements;
+* operating-system interface elements;
+* application interface elements;
+* filename indicators that may support screenshot detection;
+* other screenshot-specific visual evidence defined by this module.
 
-It does not determine:
+The module does not determine the semantic subject of the screenshot.
 
-which operating system produced the screenshot;
-which game is shown;
-which application is visible;
-which anime is displayed.
+For example, identifying a screenshot does not by itself determine:
 
-These responsibilities belong to future specialised modules.
+* which game is shown;
+* which application produced it;
+* which universe is represented;
+* which character is shown;
+* whether the image is a meme.
 
-4. Input
+Those interpretations belong to other modules where applicable.
 
-The module reads:
+---
 
-Image
-File
-Scanner metadata
-Current SHA-512
+# 3. Module Independence
 
-The module accesses the image only when visual analysis is required.
+Screenshot Analysis is independently executable.
 
-5. Output
+It requires a valid database file identity for the file being processed, but it does not require Scanner to be running at the same time or to have been executed immediately before it.
 
-The module produces Observations.
+The module does not invoke other modules directly.
 
-Initial feature set:
+Persistent information produced by Screenshot Analysis is written to the shared database and may later be consumed by other modules.
 
-IsScreenshot
+For example:
 
-HasSystemUI
+```text
+Scanner
+    ↓
+Database
+    ↓
+Screenshot Analysis
+    ↓
+Database
+    ↓
+IRL / Universe / other modules
+```
 
-HasApplicationUI
+The other modules do not need Screenshot Analysis to remain active.
 
-HasGameHUD
+---
 
-FilenameSuggestsScreenshot
+# 4. Input
 
-Each Observation shall contain:
+The module processes files that have a valid file identity in the database according to DOC-012.
 
-ImageID
-ModuleID
-Feature
-Value
-Confidence
-Timestamp
-6. Definitions
-Screenshot
+Relevant input information may include:
 
-An image that most likely represents a captured screen rather than artwork or a photograph.
+```text
+SHA512
+current_path
+filename
+extension
+width
+height
+```
 
-System UI
+The module may access the current filesystem file when image decoding or visual analysis is required.
 
-Visual elements provided by an operating system.
+A file may be processed only when the current binary state can be reliably associated with the database identity being analysed.
+
+---
+
+# 5. Output
+
+Screenshot Analysis produces `Analysis Result` records as defined by DOC-005.
+
+Initial result types may include:
+
+```text
+IS_SCREENSHOT
+HAS_SYSTEM_UI
+HAS_APPLICATION_UI
+HAS_GAME_HUD
+FILENAME_SUGGESTS_SCREENSHOT
+```
+
+Each result should contain, where applicable:
+
+```text
+file identity / file_id
+module_id
+feature
+value
+confidence
+module_version
+created_at
+```
+
+The logical ownership of these results belongs to Screenshot Analysis.
+
+The module must not overwrite analysis results owned by other modules.
+
+---
+
+# 6. Definitions
+
+## Screenshot
+
+An image that contains evidence consistent with a captured display screen rather than purely rendered artwork or a conventional photograph.
+
+The exact decision threshold is configurable or defined by the module implementation.
+
+## System UI
+
+Interface elements associated with an operating system.
 
 Examples include:
 
+```text
 Android status bar
-iOS status bar
 Windows taskbar
 macOS Dock
 Linux desktop panels
-Application UI
+```
 
-Visual interface elements belonging to desktop or mobile applications.
+## Application UI
+
+Interface elements belonging to an application.
 
 Examples include:
 
-browser toolbars;
-Discord interface;
-Reddit interface;
-Pixiv interface;
-file explorer windows.
-Game HUD
+```text
+browser toolbars
+Discord interface
+Reddit interface
+Pixiv interface
+file explorer windows
+```
 
-Persistent interface elements visible during gameplay.
+The presence of application UI is evidence, not absolute proof that the entire image is a screenshot.
 
-Typical examples:
+## Game HUD
 
-minimap;
-health bar;
-mana or stamina bar;
-quest tracker;
-skill icons;
-inventory shortcuts.
-Filename Suggestion
+Persistent or contextual game-interface elements visible during gameplay.
 
-A filename containing words commonly associated with screenshots.
+Examples include:
 
-Typical examples:
+```text
+minimap
+health bar
+mana/stamina bar
+quest tracker
+skill icons
+inventory shortcuts
+```
 
+Game HUD evidence does not by itself identify the game or universe.
+
+## Filename Screenshot Indicator
+
+A filename containing terms commonly associated with screenshots or captures.
+
+Examples include:
+
+```text
 Screenshot
-
 Screen
-
 Capture
-
 Snip
-
 截圖
-
 スクリーンショット
+```
 
-Filename evidence shall be treated only as supporting information.
+Filename evidence is supporting evidence only and shall never be considered conclusive by itself.
 
-It shall never be considered conclusive on its own.
+---
 
-7. Confidence
+# 7. Evidence Sources
 
-Every Observation shall include a confidence score.
+The module may combine multiple evidence sources.
 
-Confidence expresses how strongly the available evidence supports the observation.
+Examples:
 
-The calculation method is implementation-defined.
+```text
+filename evidence
+visual UI detection
+system UI detection
+application UI detection
+game HUD detection
+```
 
-8. Processing Rules
+The implementation may assign different weights to individual sources.
 
-The module analyses each unique SHA-512 only once.
+The method used to combine evidence is implementation-specific, but the resulting confidence must reflect the module's actual assessment rather than merely counting detected indicators.
 
-If valid observations already exist for the current SHA-512, the image shall be skipped.
+---
 
-If the SHA changes, all observations produced by this module become obsolete and shall be recalculated.
+# 8. Confidence
 
-9. Evidence Sources
+Where the module provides an automatic confidence value, it shall represent the module's confidence in the corresponding result.
 
-The module may use multiple independent evidence sources.
+A confidence value does not constitute a user decision.
+
+Module-specific thresholds may determine whether a result is considered strong enough for downstream processing, but Screenshot Analysis itself does not move or classify files based solely on its confidence.
+
+---
+
+# 9. Processing and Reprocessing
+
+The module may avoid reprocessing a file when a valid current result already exists for the same:
+
+```text
+SHA512
+module version
+relevant analysis configuration/rule version
+```
+
+An existing result may require reprocessing when:
+
+* SHA512 changes;
+* the module version changes in a way that affects results;
+* analysis rules change;
+* relevant configuration changes;
+* an explicit reprocessing operation is requested.
+
+The module must not treat a different filesystem path as a reason to reanalyse an otherwise unchanged binary unless its own specification requires path-based evidence.
+
+If SHA512 changes, results associated with the previous binary identity do not become results for the new identity.
+
+---
+
+# 10. Database Access
+
+The module reads data required for its operation from the shared database and filesystem where appropriate.
+
+It writes only data belonging to its documented responsibility, primarily `Analysis Result` and related execution information.
+
+It does not modify Scanner-owned filesystem identity information except where a future shared standard explicitly permits it.
+
+It does not modify user classifications or manual placement decisions.
+
+---
+
+# 11. Threading and Resource Usage
+
+Parallel execution should be supported.
+
+The number of workers should be configurable according to DOC-010 and the common configuration system.
+
+The implementation should use available resources efficiently while respecting configured safety limits.
+
+Expensive visual analysis should not require loading the complete collection into memory.
+
+---
+
+# 12. Processing Strategy
+
+Where practical, inexpensive evidence sources should be evaluated before more expensive visual processing.
+
+For example:
+
+```text
+filename / metadata evidence
+        ↓
+cheap visual checks
+        ↓
+detailed visual analysis when necessary
+```
+
+The implementation may use early-exit or staged analysis when this provides a meaningful performance benefit without reducing required accuracy.
+
+---
+
+# 13. Error Handling
+
+If a file cannot be analysed safely:
+
+* the failure shall be logged according to DOC-011;
+* incomplete results shall not be published as valid analysis results;
+* processing of unrelated files should continue when safe.
+
+Typical recoverable problems include:
+
+```text
+unsupported image encoding
+corrupted image
+read failure
+unexpected decoder error
+```
+
+---
+
+# 14. Logging
+
+Every execution shall create a Module Execution record and an execution log.
+
+The summary should include, where applicable:
+
+```text
+processed
+skipped
+errors
+reprocessed
+execution duration
+```
+
+Detailed errors should identify the affected file where possible using its SHA512 and/or internal file identifier.
+
+---
+
+# 15. Interaction with Other Modules
+
+Screenshot Analysis does not directly invoke or communicate with other modules.
+
+Other modules may consume its results through the shared database.
 
 Examples include:
 
-filename analysis;
-image analysis;
-user interface detection;
-HUD detection.
-
-Each source contributes to the final confidence score.
-
-The weighting of evidence is implementation-defined.
-
-10. Database Access
-
-The module reads:
-
-Image
-File
-Module
-
-The module writes:
-
-Observation
-
-The module does not modify Scanner data or observations created by other modules.
-
-11. Threading
-
-Parallel execution shall be supported.
-
-The number of worker threads shall be configurable.
-
-12. Error Handling
-
-If an image cannot be analysed:
-
-the error shall be logged;
-processing continues;
-no incomplete observation shall be written.
-13. Logging
-
-Each execution produces a summary log.
-
-Example:
-
-Screenshot Analysis
-
-Started:
-2026-07-18 11:00
-
-Processed:
-48,912
-
-Skipped:
-4,921,034
-
-Errors:
-5
-
-Duration:
-00:05:17
-
-Detailed error information shall follow the summary.
-
-14. Performance Requirements
-
-The module shall prioritise computationally inexpensive evidence sources before performing more expensive image analysis.
-
-Repeated analysis of identical SHA-512 values shall be avoided.
-
-The implementation shall remain suitable for collections containing millions of images.
-
-15. Interaction with Other Modules
-
-The Screenshot Analysis module depends only on Scanner.
-
-It is independent of:
-
-Color Analysis
-Meme Analysis
+```text
 IRL Analysis
-Universe Analysis
+Reaction Image Analysis
+AutoSort
+Collection Consistency Checker
+```
 
-Future modules may consume its observations.
+Such consumption does not create a runtime dependency on Screenshot Analysis.
 
-The module shall never invoke another module directly.
+A module may be executed multiple times while Screenshot Analysis is not executed, and vice versa, provided the required database data exists.
 
-16. Design Philosophy
+---
 
-The module does not decide whether an image should be moved.
+# 16. Sorting and Filesystem Operations
 
-Its responsibility is limited to collecting evidence related to screenshots.
+Screenshot Analysis shall not:
 
-Decision-making belongs to later processing stages.
+* move files;
+* rename files;
+* create or modify FINAL directory structures;
+* create final destinations based on model output;
+* modify user decisions.
 
-17. Future Extensions
+The module may contribute evidence used by another module that performs such operations, but the responsibility for those operations remains with that module.
 
-Potential future capabilities include:
+AI/transition workspace handling is likewise outside Screenshot Analysis unless explicitly assigned by a future module specification.
 
-operating system identification;
-game identification;
-application identification;
-UI element classification;
-OCR-assisted interface detection;
-screenshot origin estimation.
+---
 
-These features are intentionally excluded from Version 1.
+# 17. Performance Requirements
 
-18. Acceptance Criteria
+The module is intended for collections containing millions of files.
 
-The module shall be considered complete when it can:
+The implementation should:
 
-identify likely screenshots;
-detect common interface elements;
-recognise filename-based screenshot hints;
-write observations to the database;
-skip previously analysed SHA-512 values;
-recover gracefully from processing errors;
-operate efficiently on multi-million image collections.
-End of DOC-103
+* avoid unnecessary reprocessing;
+* use staged/cheap evidence before expensive analysis where practical;
+* process files independently so one failure does not stop the whole execution;
+* avoid requiring the complete image collection in memory.
+
+---
+
+# 18. Future Extensions
+
+Possible future extensions include:
+
+* operating-system identification;
+* game identification;
+* application identification;
+* UI element classification;
+* OCR-assisted interface detection;
+* screenshot-origin estimation.
+
+These features may remain within this module if they remain part of the same logical responsibility, or may become separate modules if their scope becomes sufficiently independent to justify separation.
+
+---
+
+# 19. Acceptance Criteria
+
+Screenshot Analysis is considered compliant when it can:
+
+* process files with valid SHA512-based identities;
+* detect screenshot-related evidence;
+* record the defined initial analysis results in the shared database;
+* include meaningful confidence information where applicable;
+* avoid reprocessing unchanged results when the applicable module/rule version is unchanged;
+* reprocess when SHA512 or relevant analysis logic changes;
+* continue after recoverable per-file errors;
+* operate independently of other module processes;
+* communicate persistent results through the shared database;
+* perform no unauthorized filesystem sorting or classification operations.
+
+---
+
+# End of DOC-103
