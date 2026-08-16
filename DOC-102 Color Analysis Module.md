@@ -1,272 +1,419 @@
-DOC-102
-Color Analysis Module
+# DOC-102
 
-Project: AI Image Framework (working title)
+# Color Analysis Module
 
-Document: DOC-102
+**Project:** AI Image Collection Management System
 
-Module: Color Analysis
+**Document:** DOC-102
 
-Version: 1.0 Draft
+**Module:** Color Analysis
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-DOC-101
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
 
-The Color Analysis module extracts basic color-related characteristics of an image.
+---
 
-The module does not classify content.
+# 1. Purpose
 
-The module does not move files.
+The Color Analysis module extracts basic global colour characteristics from image files and stores the results in the shared database.
 
-The module does not make sorting decisions.
+The module is an information provider. It does not decide where a file belongs, perform semantic classification or modify the collection structure.
 
-Its sole responsibility is to produce color-related observations for later modules.
+---
 
-2. Responsibilities
+# 2. Responsibilities
 
-The module SHALL:
+The module shall:
 
-analyse image color distribution;
-determine whether an image is black-and-white;
-determine whether an image is monochrome;
-determine whether an image is mostly black-and-white;
-determine whether an image is mostly monochrome;
-store observations in the database.
+* analyse global colour characteristics;
+* determine whether an image satisfies the project's black-and-white criteria;
+* determine whether an image is predominantly black-and-white;
+* determine whether an image is monochrome;
+* determine whether an image is predominantly monochrome;
+* write its analysis results to the shared database;
+* record module execution and errors according to the common project standards.
 
-The module SHALL NOT:
+The module shall not:
 
-detect screenshots;
-detect memes;
-detect real-life images;
-detect anime;
-detect characters;
-move or rename files;
-modify folder structures.
-3. Scope
+* identify universes or characters;
+* detect screenshots, memes, IRL content or other semantic categories owned by other modules;
+* move or rename files;
+* create or modify collection directories;
+* modify user classifications or manual decisions owned by other workflows.
 
-The module evaluates only global color characteristics.
+---
 
-It does not attempt semantic interpretation.
+# 3. Module Independence
 
-For example, the following questions are outside the scope of this module:
+Color Analysis is an independently executable module.
 
+It does not invoke other modules and does not require another module process to remain active.
+
+The module reads the current database state when it runs and writes its own results back to the database.
+
+For example, the following execution history is valid:
+
+```text
+Scanner
+    ↓
+Database
+
+IRL Analysis × 5
+Screenshot Analysis × 2
+Color Analysis × 10
+IRL Analysis × 1
+```
+
+The order and number of executions of other modules do not impose an execution schedule on Color Analysis.
+
+The module normally requires the file to have a valid SHA512-based identity in the database. Scanner is responsible for discovering new files and creating such identities; Color Analysis does not invoke Scanner automatically.
+
+---
+
+# 4. Scope
+
+The module evaluates global visual colour characteristics only.
+
+The following questions are outside its scope:
+
+```text
 What character is shown?
-Is this an anime screenshot?
-Is the image a meme?
+What universe is represented?
+Is the image a screenshot?
+Is the image a reaction image or meme?
+Is the image IRL?
 Is the image AI-generated?
-Does the image belong to a specific franchise?
-4. Input
+Where should the file be stored?
+```
 
-The module reads image records produced by Scanner.
+---
 
-Required information includes:
+# 5. Input
 
-Image identifier;
-current file location;
-SHA-512;
-image format;
-image dimensions.
+The module processes eligible file records known to the database.
 
-The module does not access the filesystem directly unless required for image decoding.
+Required logical information includes:
 
-5. Output
+```text
+SHA512
+current filesystem state
+image format
+image dimensions
+```
 
-The module produces Observations.
+An internal `file_id` may be used for database relationships where the implementation provides one.
 
-The initial feature set consists of:
+The module may read the image from the filesystem when required for decoding or pixel analysis. Such filesystem access is subject to the configured access policy.
 
-IsBW
+---
 
-IsMostlyBW
+# 6. Output
 
-IsMonochrome
+Color Analysis writes **Analysis Result** records as defined by DOC-005.
 
-IsMostlyMonochrome
+The initial feature set is:
 
-Each Observation shall include:
+```text
+IS_BW
+IS_MOSTLY_BW
+IS_MONOCHROME
+IS_MOSTLY_MONOCHROME
+```
 
-ImageID
-ModuleID
-Feature
-Value
-Confidence
-Timestamp
-6. Definitions
-Black-and-White
+Each result should contain, at minimum, information corresponding to:
 
-An image whose colors satisfy the project's black-and-white criteria.
+```text
+file identity
+module
+feature
+value
+confidence where applicable
+module/rule version
+creation time
+```
 
-Exact mathematical criteria are implementation-defined.
+The module owns the results that it produces. It must not overwrite analysis results belonging to another module.
 
-Mostly Black-and-White
+Other modules may consume these results through the shared database without communicating directly with Color Analysis.
 
-An image that does not fully satisfy the black-and-white definition but is sufficiently close to be considered predominantly black-and-white.
+---
+
+# 7. Definitions
+
+## 7.1 Black-and-White
+
+An image is considered black-and-white when its pixels satisfy the project's configured black-and-white criteria.
+
+The exact numerical criteria are an implementation/configuration concern and may be refined without changing the logical feature definition.
+
+## 7.2 Mostly Black-and-White
+
+An image is mostly black-and-white when it does not fully satisfy the black-and-white definition but the configured analysis determines that the image is predominantly black-and-white.
+
+Examples may include:
+
+* a grayscale illustration containing a small coloured element;
+* a manga page with a limited coloured area;
+* an otherwise monochrome image containing a coloured signature.
+
+## 7.3 Monochrome
+
+An image is monochrome when its visual content is predominantly based on a single colour family.
+
+Monochrome is not limited to grayscale.
 
 Examples include:
 
-manga pages containing small colored elements;
-grayscale illustrations with a colored signature;
-monochrome artwork containing isolated colored pixels.
-Monochrome
-
-An image whose visual appearance is based primarily on a single color family.
-
-Typical examples:
-
+```text
 sepia
 blue monochrome
 green monochrome
 red monochrome
+```
 
-Monochrome is not limited to grayscale.
+## 7.4 Mostly Monochrome
 
-Mostly Monochrome
+An image is mostly monochrome when one colour family clearly dominates while a limited amount of secondary colour information remains.
 
-An image that is visually dominated by a single color family while containing limited secondary colors.
+The distinction between `IS_MONOCHROME` and `IS_MOSTLY_MONOCHROME` is determined by the configured analysis criteria.
 
-7. Confidence
+---
 
-Every Observation shall include a confidence value.
+# 8. Confidence
 
-Confidence represents the module's certainty regarding its own classification.
+The module may provide confidence for results when its analysis method supports a meaningful confidence value.
 
-The exact calculation method is implementation-defined.
+Confidence expresses the module's certainty about the analysis result.
 
-8. Processing Rules
+Confidence must not be confused with the semantic meaning of the feature itself.
 
-The module shall analyse every eligible image once per SHA-512 value.
+For example:
 
-If an Observation already exists for the current SHA-512, the module shall skip processing.
+```text
+IS_MOSTLY_BW = TRUE
+confidence = 0.98
+```
 
-If the SHA-512 changes, all previous observations produced by this module become obsolete and a new analysis shall be performed.
+means the module is highly confident that the image satisfies the `mostly black-and-white` criterion. It does not mean that the image is 98% black-and-white in a semantic sense unless the implementation explicitly defines confidence that way.
 
-9. Database Access
+---
 
-The module reads:
+# 9. Processing Rules
 
-Image
-File
-Module
+A module execution should process a file when the current analysis state indicates that a valid result is required.
 
-The module writes:
+For the current binary identity, identified by SHA512, an existing current result produced by the same module and compatible rule/module version may be reused.
 
-Observation
+The module should skip unnecessary reprocessing when the applicable result is already current.
 
-The module does not modify Scanner data.
+The module must not assume that a file is permanently analysed after one execution. Reprocessing may be required when:
 
-10. Performance Requirements
+* the binary SHA512 changes;
+* the module version changes;
+* the analysis rules change;
+* a future reprocessing policy invalidates the previous result;
+* the user explicitly requests reprocessing.
 
-The module is intended to process collections containing millions of images.
+Detailed cross-module reprocessing orchestration belongs to future reprocessing architecture and the relevant module configuration.
 
-Implementation should favour efficient approximation over computationally expensive exhaustive analysis.
+---
 
-Repeated analysis of identical files shall be avoided whenever possible.
+# 10. SHA512 and Binary Version Changes
 
-11. Threading
-
-The module shall support parallel execution.
-
-The number of worker threads shall be configurable.
-
-Thread scheduling is implementation-defined.
-
-12. Error Handling
-
-If an image cannot be analysed:
-
-the error shall be logged;
-processing shall continue;
-no partial Observation shall be stored.
-
-Typical recoverable errors include:
-
-unsupported image encoding;
-corrupted image;
-read failure.
-13. Logging
-
-Every execution shall produce a summary log.
+Analysis results belong to a specific binary file identity.
 
 Example:
 
+```text
+SHA512 = AAAA
+    ↓
+Color Analysis result
+```
+
+If the binary content changes:
+
+```text
+SHA512 = BBBB
+```
+
+the new binary identity requires a new Color Analysis result.
+
+The result belonging to `AAAA` remains associated with the historical `AAAA` record and must not be silently reused as the result for `BBBB`.
+
+A rename or move that does not change SHA512 does not invalidate the Color Analysis result merely because the path changed.
+
+---
+
+# 11. Database Access
+
+The module reads information required for its own operation from the shared database and filesystem.
+
+It writes only data belonging to Color Analysis and its execution/logging responsibilities.
+
+Logical database concepts include:
+
+```text
+File
+Analysis Result
+Module
+Module Execution
+```
+
+The module shall not modify Scanner-owned filesystem synchronization state merely as a side effect of analysis.
+
+---
+
+# 12. Threading and Resource Usage
+
+The module shall support parallel processing where practical.
+
+The worker count should be configurable when exposed by the implementation.
+
+The module may use additional RAM or CPU resources when this provides a meaningful performance benefit, while respecting configured/system resource limits.
+
+Parallel processing must preserve database consistency and must not produce duplicate or conflicting current results for the same analysis context.
+
+---
+
+# 13. Error Handling
+
+If an image cannot be analysed, the module shall:
+
+* record the error according to DOC-011;
+* continue processing other eligible files whenever safe;
+* avoid storing a partially computed result as a valid current result.
+
+Typical recoverable errors include:
+
+* unsupported image encoding;
+* corrupted image;
+* filesystem read failure;
+* insufficient resources for the current item.
+
+A database failure that prevents safe persistence may stop the execution.
+
+---
+
+# 14. Logging
+
+Every execution shall create the module execution record and logs required by DOC-007 and DOC-011.
+
+A summary should include, where applicable:
+
+```text
+files considered
+files processed
+files skipped
+files already current
+errors
+duration
+```
+
+Detailed errors should identify the affected file identity/path where available.
+
+---
+
+# 15. Performance Requirements
+
+The module is intended for collections containing millions of images.
+
+Implementation should favour efficient analysis methods and avoid unnecessary full-image work when existing valid results can be reused.
+
+The module should not require the entire collection to be loaded into memory.
+
+Parallel processing should be used where it provides meaningful performance improvement.
+
+---
+
+# 16. Interaction with Other Modules
+
+Color Analysis does not invoke any other module.
+
+Its relationship with the rest of the system is:
+
+```text
+Scanner
+   ↓
+Database
+   ↓
 Color Analysis
+   ↓
+Database
+   ↓
+other modules may consume Color Analysis results
+```
 
-Started:
-2026-07-18 10:00
+Possible consumers include later filtering, classification or sorting modules, but Color Analysis does not require those modules to be present or running.
 
-Processed:
-52,318
+---
 
-Skipped:
-4,918,441
+# 17. Design Philosophy
 
-Errors:
-3
+Color Analysis deliberately separates observation from interpretation.
 
-Duration:
-00:03:41
+For example, this module may determine:
 
-Detailed errors shall be appended below the summary.
+```text
+IS_BW = TRUE
+```
 
-14. Interaction with Other Modules
+but it does not decide:
 
-The module depends on Scanner.
+```text
+"therefore this is a manga"
+```
 
-The module is independent of:
+or:
 
-Screenshot Filter
-Meme Filter
-IRL Filter
-Universe Detector
+```text
+"therefore move this file to Themes"
+```
 
-Future modules may consume its observations.
+Those decisions belong to other modules and workflows.
 
-The Color Analysis module shall never invoke other modules directly.
+---
 
-15. Design Philosophy
+# 18. Future Extensions
 
-This module is an information provider.
+Possible future additions include:
 
-It enriches the database with color-related facts.
+* dominant colour estimation;
+* colour palette extraction;
+* histogram data;
+* brightness estimation;
+* contrast estimation;
+* saturation analysis;
+* additional colour-distribution metrics.
 
-It does not decide how those facts will be used.
+Such features should remain within this module only when they share the same logical responsibility and do not create an unnecessarily broad analysis component.
 
-Higher-level modules remain responsible for interpreting observations.
+---
 
-16. Future Extensions
+# 19. Acceptance Criteria
 
-The following features are intentionally excluded from Version 1:
+Color Analysis is considered compliant when it can:
 
-dominant color detection;
-color palette extraction;
-histogram generation;
-brightness estimation;
-contrast estimation;
-saturation analysis;
-artistic style recognition.
+* process supported image formats;
+* produce the four defined colour-analysis results;
+* associate every result with the correct SHA512-based binary identity;
+* reuse current valid results when applicable;
+* invalidate/recompute results when the binary identity or relevant analysis version changes;
+* write results through the shared database;
+* operate independently of other module executions;
+* continue after recoverable per-file failures;
+* support multi-million-image collections without requiring the entire collection in memory;
+* generate execution records and logs according to the common project standards.
 
-These capabilities may be implemented as separate modules in the future.
+---
 
-17. Acceptance Criteria
-
-The module shall be considered complete when it can:
-
-process all supported image formats;
-determine black-and-white status;
-determine monochrome status;
-determine "mostly" variants;
-write observations to the database;
-skip previously analysed SHA-512 values;
-continue operation after recoverable failures;
-operate efficiently on multi-million image collections.
-End of DOC-102
+# End of DOC-102
