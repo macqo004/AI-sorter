@@ -1,59 +1,114 @@
-DOC-101
-Scanner Module
+# DOC-101
 
-Project: AI Image Framework (working title)
+# Scanner Module
 
-Document: DOC-101
+**Project:** AI Image Collection Management System
 
-Module: Scanner
+**Document:** DOC-101
 
-Version: 1.0 Draft
+**Module:** Scanner
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
+DOC-301
+DOC-302
 
-Scanner is responsible for synchronizing the database with the filesystem.
+---
 
-Scanner performs no image analysis.
+# 1. Purpose
 
-Scanner is the only module responsible for discovering new files and detecting filesystem changes.
+Scanner is responsible for synchronizing the project database with the configured filesystem scope.
 
-All other modules depend on Scanner.
+Scanner performs no semantic image analysis.
 
-2. Responsibilities
+Scanner is the module responsible for discovering files that are in scope for the project and for detecting filesystem changes relevant to the database.
 
-Scanner SHALL:
+Scanner is the **base file-discovery module**: a newly added file must normally be discovered and assigned a valid SHA512 identity by Scanner before other analysis modules can process it through the shared database.
 
-discover new image files;
-detect deleted files;
-detect renamed files;
-detect moved files;
-detect modified files;
-compute SHA-512 hashes when required;
-update the database;
-generate execution logs.
+Scanner does not invoke other modules.
 
-Scanner SHALL NOT:
+---
 
-classify images;
-move files;
-rename files;
-create tags;
-execute AI models;
-modify user classifications.
-3. Supported File Types
+# 2. Responsibilities
 
-Initially supported:
+Scanner shall:
 
+* discover new supported image files within configured scan scope;
+* detect files that disappeared from configured scan scope;
+* detect renames and moves where the same binary identity can be established;
+* detect binary-content changes;
+* calculate SHA512 when required;
+* create or update file records;
+* update current filesystem state;
+* create relevant file events;
+* record Scanner executions;
+* generate logs according to DOC-011.
+
+Scanner shall not:
+
+* classify images;
+* perform semantic analysis;
+* move files;
+* rename files;
+* create FINAL collection directories;
+* execute AI models;
+* modify user classifications or manual decisions;
+* overwrite analysis results owned by other modules.
+
+---
+
+# 3. Module Independence
+
+Scanner is operationally independent from the other processing and analysis modules, but it is the foundational source of file records in the database.
+
+The normal relationship is:
+
+```text
+Filesystem
+    ↓
+Scanner
+    ↓
+Database
+    ↓
+Other modules
+```
+
+The other modules do not need Scanner to remain running.
+
+After a file has a valid database record, other modules may be executed in any order and any number of times according to their own specifications.
+
+For example:
+
+```text
+Day 1–10:
+    Scanner
+    IRL Analysis × 5
+    Screenshot Analysis × 2
+    IRL Analysis × 1
+    B&W Analysis × 10
+```
+
+These are independent executions. The later executions use the current database state; no module process needs to remain active for another module.
+
+If new files are added to a configured source/root after the last Scanner execution, those files are not available to database-driven analysis modules until Scanner discovers them.
+
+---
+
+# 4. Supported File Types
+
+Initially supported image formats are:
+
+```text
 jpg
 jpeg
 png
@@ -61,9 +116,13 @@ webp
 gif
 bmp
 pns
+```
 
-Ignored:
+The project may extend this list through configuration or a future specification revision.
 
+The Scanner shall ignore known non-image files including:
+
+```text
 mp4
 webm
 avi
@@ -72,416 +131,420 @@ mov
 zip
 rar
 7z
+```
 
-Unknown file extensions shall be ignored unless explicitly enabled in future versions.
+Unknown extensions shall be ignored unless explicitly supported by a future revision.
 
-4. Scan Targets
+---
 
-Scanner operates on configured directory roots.
+# 5. Scan Scope
 
-Each root has a logical role.
+Scanner operates on filesystem roots and traversal scopes defined by collection/configuration documents.
 
-Possible roles:
+Physical directory names such as `TODO`, `AI`, `FINAL`, `Anime` or `Themes` have no inherent meaning to Scanner.
 
-TODO
+The Scanner determines its scope from the configured Collection Definition and applicable root/access-policy settings.
 
-AI
+A scan root may represent, for example:
 
-Library
+```text
+SOURCE
+TRANSITION
+FINAL
+```
 
-Library represents one manually curated collection.
+or another explicitly configured role.
 
-Multiple Library roots are supported.
+Multiple roots may be configured.
+
+---
+
+# 6. Traversal and Scan Depth
+
+Scanner shall not independently invent collection depth rules.
+
+Directory traversal is governed by the configured traversal rules and boundaries defined by Collection Definition.
+
+In particular, Scanner shall respect the distinction between:
+
+* a directory that is part of the configured classification structure;
+* a classification boundary after which subdirectories belong to user organization;
+* a branch explicitly excluded from traversal.
+
+This prevents organizational folders inside a classified directory from being interpreted as additional semantic levels merely because they exist physically.
 
 Example:
 
-TODO
+```text
+Furina          ← classification boundary
+├── 001
+├── 002
+├── 003
+└── Favorites
+```
 
-AI
+The existence of `001`, `002` or `Favorites` does not cause Scanner to redefine the classification hierarchy.
 
-Anime
+The exact traversal-rule definitions are owned by DOC-301 and DOC-302.
 
-MonsterGirls
+A module-specific scan mode may additionally limit the physical scope it processes, but such a limit must be explicitly configured.
 
-WesternAnimation
+---
 
-Themes
+# 7. Access Policy
 
-Scanner treats every Library root identically.
+Scanner may inspect files only within the filesystem scope permitted by the configured Directory Access Policy.
 
-5. Recursive Scanning
+Scanner is primarily a read/discovery module.
 
-Every configured root is scanned recursively.
+It must not use scanning as a justification for modifying files.
 
-Every subdirectory is included automatically.
+The Scanner may write to the project database and logs even when the scanned filesystem root is read-only, provided the database and logging locations themselves are writable.
 
-No directory depth limit exists.
+---
 
-6. File Discovery
+# 8. File Discovery
 
-For every supported file Scanner collects:
+For every supported file within scope, Scanner should collect or verify, where available:
 
-absolute path;
-directory;
-filename;
-extension;
-size;
-image dimensions;
-modification time;
-SHA-512 hash.
-7. SHA-512 Strategy
+```text
+current path
+filename
+extension
+file size
+filesystem modification time
+image width
+image height
+SHA512
+```
 
-SHA-512 is calculated only when required.
+The database representation is defined by DOC-005 and the file identity by DOC-012.
 
-Algorithm:
+---
 
-Read file size
+# 9. SHA512 Strategy
 
-↓
+SHA512 is the logical binary-content identity of the file.
 
-Read modification timestamp
+Scanner should avoid unnecessary recalculation while maintaining a reliable identity model.
 
-↓
+For a previously known file, Scanner may first compare inexpensive filesystem metadata such as:
 
-Compare with database
+```text
+file size
+modified time
+```
 
-↓
+against the stored state.
 
-Changed?
+If the configured change-detection policy indicates that the binary content should be unchanged, the existing SHA512 may be reused.
 
-YES
-    ↓
-    Calculate SHA-512
-    ↓
-    Update database
+If the metadata indicates a possible change, or if the file is new and no valid SHA512 exists, Scanner shall calculate SHA512.
 
-NO
-    ↓
-    Reuse existing SHA-512
+A successful content change results in a new SHA512 identity according to DOC-012 rather than overwriting the old binary identity.
 
-This minimizes unnecessary disk reads during repeated scans.
+Metadata-based optimization is a performance optimization, not a replacement for the SHA512 identity model.
 
-8. Change Detection
+---
 
-Scanner detects the following events.
+# 10. Hash Reliability
 
-New file
+Scanner shall treat a successfully calculated SHA512 as valid only when the file was read successfully and the calculation completed without a detected error.
 
-File not present in database.
+If a calculation fails, Scanner shall:
 
-Action:
+* log the failure;
+* record an appropriate failure state where supported by the database model;
+* not invent a placeholder SHA512;
+* not expose the file as a successfully identified input to downstream analysis.
 
-Create Image and File records.
+Transient or suspicious read conditions may justify a retry or verification pass according to implementation policy.
 
-Modified file
+The project does not implement a normal workflow for theoretical SHA512 collisions. An apparent collision or internal inconsistency is an integrity error requiring investigation.
 
-Size or modification timestamp changed.
+---
 
-Action:
+# 11. Change Detection
 
-Recalculate SHA-512.
+Scanner shall detect, where possible:
 
-Update File information.
+### New file
 
-Previous analytical results become invalid according to module-specific rules.
-
-Renamed file
-
-SHA identical.
-
-Filename different.
-
-Action:
-
-Update File record.
-
-Create Event.
-
-Moved file
-
-SHA identical.
-
-Directory different.
+No current active record exists for the discovered SHA512.
 
 Action:
 
-Update File record.
+* create the new file record;
+* assign an internal `file_id` if used;
+* store current filesystem state;
+* mark the record active.
 
-Create Event.
+### Rename
 
-Deleted file
-
-File no longer exists.
+The binary content is unchanged but the filename changed.
 
 Action:
 
-Update LifecycleState.
+* retain SHA512 identity;
+* update current path/filename;
+* create a relevant event.
 
-Create Event.
+### Move
 
-9. Database Access
+The binary content is unchanged but the directory changed.
 
-Scanner may modify:
+Action:
 
-Image
+* retain SHA512 identity;
+* update current path;
+* create a relevant event.
+
+### Binary modification
+
+The resulting SHA512 differs from the previous binary identity.
+
+Action:
+
+* preserve the previous record/history;
+* create the new SHA512 record;
+* associate the new filesystem state with the new identity;
+* allow affected analysis results to be re-established according to module rules.
+
+### Missing file
+
+A previously known active file is no longer found within the managed scan scope.
+
+Action:
+
+* update lifecycle state according to DOC-012 and maintenance rules;
+* create a relevant event where applicable.
+
+---
+
+# 12. Duplicate Binary Files
+
+If multiple physical filesystem entries contain identical binary content, they have the same SHA512 and therefore the same logical binary identity.
+
+Scanner shall not create a different logical file identity solely because the binary content appears under another filename or directory.
+
+Handling of duplicate physical copies is outside the Scanner's primary responsibility.
+
+---
+
+# 13. Database Operations
+
+Scanner may create or update data belonging to filesystem discovery and synchronization, including:
+
+```text
 File
-Event
+File Event
+Module Execution
+filesystem-state fields owned by Scanner
+```
 
-Scanner SHALL NOT create Observations.
+Scanner shall not create semantic analysis results owned by other modules.
 
-10. Threading
+Scanner shall write its persistent results to the shared database so that subsequent modules can use the discovered file state without direct communication with Scanner.
+
+---
+
+# 14. Transactions and Failure Isolation
+
+Scanner is not a single all-or-nothing transaction.
+
+Successfully processed files should be committed independently whenever safe to do so.
+
+Example:
+
+```text
+File A → OK → saved
+File B → ERROR → logged/skipped
+File C → OK → saved
+```
+
+Failure processing one file must not roll back unrelated successfully processed files.
+
+The exact transaction boundaries are implementation details, provided this failure-isolation rule is preserved.
+
+---
+
+# 15. Threading and Resource Usage
 
 Scanner is designed for parallel execution.
 
-Configuration parameter:
+A configurable worker count may be provided:
 
-WorkerThreads
-
-Allowed values:
-
+```text
 0 = Automatic
-
 1
-
 2
-
 4
-
 8
-
 16
-
 ...
+```
 
-Automatic mode selects an implementation-defined number of worker threads based on available CPU resources.
+Automatic mode selects a reasonable number based on available CPU and configured resource limits.
 
-11. Transactions
+Scanner should use memory and CPU resources efficiently without exhausting the machine.
 
-Scanner is not transactional.
+Parallel workers must not violate database or filesystem consistency.
 
-Every successfully processed file is written immediately.
+---
 
-Failure processing one file must not affect any other file.
+# 16. Error Handling
 
-Example:
+Scanner should continue processing whenever safe.
 
-File A
+Typical recoverable conditions include:
 
-OK
+* access denied;
+* unreadable/corrupted image;
+* temporary I/O error;
+* file locked by another process;
+* failure to decode optional image metadata.
 
-↓
+The affected item should be logged and skipped or marked appropriately while processing continues.
 
-saved
+A database-level failure that prevents safe persistence may stop the Scanner execution because the core purpose of Scanner is database synchronization.
 
-File B
+---
 
-ERROR
+# 17. Repeated Execution
 
-↓
+Scanner may be executed repeatedly.
 
-logged
+Repeated scans are expected and should be optimized to avoid unnecessary SHA512 recalculation and redundant database work.
 
-File C
+A later Scanner execution may discover files that did not exist during an earlier execution.
 
-OK
+This is normal behaviour and does not imply that other modules failed simply because they previously had no record for those files.
 
-↓
+---
 
-saved
-12. Error Handling
+# 18. Execution Record and Logging
 
-Scanner continues processing whenever possible.
+Each Scanner invocation shall create a Module Execution record according to DOC-005 and DOC-007.
 
-Typical recoverable errors:
+The execution log shall include, where applicable:
 
-access denied;
-corrupted image;
-unsupported format;
-temporary I/O error.
+```text
+start time
+finish time
+files discovered
+new files
+modified files
+moved files
+renamed files
+missing/deleted files
+files skipped
+hash failures
+other errors
+duration
+```
 
-The affected file is skipped.
+Logs shall comply with DOC-011.
 
-Processing continues.
+---
 
-13. Logging
+# 19. Interaction with Other Modules
 
-Each execution generates one log.
+Scanner never invokes another module directly.
 
-Example:
+The communication model is:
 
+```text
 Scanner
+   ↓
+Database
+   ↓
+Analysis / Processing Modules
+```
 
-Start:
-2026-07-17 20:00
+Analysis and processing modules may later read Scanner-produced file state from the database.
 
-Finished:
-2026-07-17 20:04
+Scanner does not need to know which downstream modules will use the data.
 
-New:
-124
+---
 
-Modified:
-8
+# 20. Configuration
 
-Moved:
-12
+Scanner configuration shall obtain its behaviour from the common configuration system.
 
-Deleted:
-3
+Configuration may include:
 
-Errors:
-2
+* selected collection/root scopes;
+* applicable traversal scope;
+* worker count;
+* supported extensions;
+* resource limits;
+* logging options;
+* hash verification/retry policy where exposed.
 
-Duration:
-00:04:18
+Physical paths must come from collection/configuration data, not hard-coded module logic.
 
-Errors are listed below the summary.
+---
 
-Example:
+# 21. Performance Requirements
 
-Access denied
+Scanner is intended for collections containing millions of files.
 
-D:\TODO\image123.jpg
-14. Performance Requirements
+Repeated scans should minimize unnecessary work by reusing valid filesystem state and SHA512 results when the configured change-detection policy permits it.
 
-The Scanner shall be optimized for repeated execution.
+The Scanner should avoid requiring the entire collection to be loaded into memory.
 
-Repeated scans should avoid recalculating SHA-512 whenever file metadata indicates no changes.
+Directory traversal and database operations should be designed for long-running scans over very large collections.
 
-The Scanner shall be capable of processing collections containing millions of files.
+---
 
-15. Interaction with Other Modules
+# 22. Design Philosophy
 
-Scanner executes before every analysis module.
+Scanner has one deliberately narrow responsibility:
 
-Analysis modules rely exclusively on information produced by Scanner.
+> **Make the database aware of the files that exist within the configured scope and keep their filesystem identity/state synchronized.**
 
-Scanner never invokes analysis modules directly.
+Scanner does not decide what an image means.
 
-Module execution order is managed externally.
+Scanner does not decide where an image belongs.
 
-16. Configuration
+Scanner does not create semantic collections.
 
-The Scanner configuration shall include:
+Those responsibilities belong to other modules and the collection configuration system.
 
-monitored directory roots;
-logical role for each root (TODO, AI, Library);
-worker thread count;
-log directory;
-supported file extensions.
-17. Design Philosophy
+---
 
-Scanner is intentionally simple.
+# 23. Future Extensions
 
-Its responsibility is limited to filesystem synchronization.
+Possible future extensions include:
 
-Semantic interpretation belongs to analysis modules.
+* filesystem event monitoring;
+* incremental directory traversal;
+* configurable exclusion patterns;
+* additional file-integrity checks;
+* optimized directory-change detection;
+* alternate checksum strategies for specific operational purposes.
 
-18. Future Extensions
+Such extensions must not change the fundamental SHA512-based file identity model.
 
-Possible future enhancements include:
+---
 
-file system event monitoring (instead of full scans),
-configurable exclusion patterns,
-incremental directory scanning,
-checksum algorithm abstraction.
+# 24. Acceptance Criteria
 
-These features are outside the scope of the first implementation.
+Scanner is considered compliant when it can:
 
-19. Acceptance Criteria
+* discover supported files within the configured scan scope;
+* create valid file identities using SHA512;
+* detect new, moved, renamed, modified and missing files where supported by the available filesystem information;
+* preserve identity across rename and move;
+* create a new identity when binary content changes;
+* update the database incrementally;
+* continue after recoverable per-file errors;
+* avoid unnecessary SHA512 recalculation where the configured change-detection policy allows it;
+* respect Collection Definition traversal/boundary rules;
+* support very large collections without requiring the entire collection in memory;
+* generate execution records and logs;
+* communicate with other modules only through documented shared database state.
 
-The Scanner module shall be considered complete when it can:
+---
 
-recursively scan configured roots;
-detect new, moved, renamed, modified and deleted files;
-maintain database consistency;
-reuse existing SHA-512 values whenever possible;
-generate execution logs;
-continue operation after recoverable errors;
-process collections containing millions of files without requiring manual intervention.
-
-
-20. Hash Calculation Reliability
-Purpose
-
-The Scanner Module shall ensure that calculated SHA512 values are reliable and that failures during hash calculation do not compromise the integrity of the collection database.
-
-The objective of this section is not to detect cryptographic SHA512 collisions, but to detect software, hardware and data integrity issues that could result in an incorrect hash being associated with a file.
-
-21. Hash Status
-
-Every scanned file shall always have one of the following hash states:
-
-PENDING
-
-Hash has not yet been calculated.
-
-VALID
-
-SHA512 has been successfully calculated and verified.
-
-FAILED
-
-The hash could not be calculated due to an error.
-
-Typical causes include:
-
-unreadable file;
-file locked by another process;
-storage I/O error;
-insufficient permissions;
-unexpected internal exception.
-
-Files with status FAILED shall not participate in any subsequent processing modules until a valid SHA512 value has been obtained.
-
-22. Hash Verification
-
-Whenever SHA512 is calculated successfully, the Scanner shall associate the value with the current database record.
-
-If Scanner detects an unexpected situation during rescanning, such as:
-
-the same file path producing a different SHA512 value,
-inconsistent file metadata,
-unexpected read errors,
-
-the Scanner should perform a second SHA512 calculation before accepting the new value.
-
-This additional verification is intended to reduce the likelihood of incorrect hashes caused by transient read errors or software faults.
-
-23. Cryptographic Collisions
-
-The project assumes that SHA512 uniquely identifies file content.
-
-The probability of two different files producing the same SHA512 value accidentally is considered negligible for the intended collection size.
-
-Therefore, identical SHA512 values are treated as identical binary content.
-
-The Scanner is not required to implement any special handling for theoretical SHA512 collisions.
-
-24. Internal Consistency
-
-The Scanner shall assume that software defects, storage errors or memory corruption are significantly more likely than an actual SHA512 collision.
-
-If internal consistency checks indicate that identical SHA512 values appear to represent different binary content, the event shall be treated as an internal integrity error.
-
-Such situations should be reported in logs for manual investigation rather than handled as normal operating conditions.
-
-25. Recovery
-
-Files with FAILED hash status may be rescanned during future Scanner executions.
-
-Once a valid SHA512 value has been successfully calculated, the file may continue through the normal processing pipeline.
-
-26. Design Principle
-
-The Scanner shall never silently ignore hash calculation failures.
-
-Every unsuccessful calculation shall produce:
-
-a log entry;
-an error status for the file;
-exclusion of the file from analysis until the problem has been resolved.
-
-This ensures that no file enters the analysis pipeline without a verified SHA512 identifier.
-
-End of DOC-101
+# End of DOC-101
