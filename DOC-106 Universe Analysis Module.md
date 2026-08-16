@@ -1,57 +1,69 @@
-DOC-106
-Universe Analysis Module
+# DOC-106
 
-Project: AI Image Framework (working title)
+# Universe Analysis Module
 
-Document: DOC-106
+**Project:** AI Image Collection Management System
 
-Module: Universe Analysis
+**Document:** DOC-106
 
-Version: 1.0 Draft
+**Module:** Universe Analysis
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-DOC-101
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
+DOC-013
+DOC-302
 
-The Universe Analysis module determines the fictional universe or franchise most likely represented by an image.
+---
 
-Unlike previous modules, Universe Analysis may produce multiple candidates ranked by confidence.
+# 1. Purpose
 
-The module enriches the database with candidate observations.
+The Universe Analysis module determines which fictional universe, franchise or other identifiable fictional setting is most strongly represented by an image.
 
-The module performs no file operations and makes no sorting decisions.
+The module is an analysis provider. It writes candidate classifications to the shared database and does not itself perform physical sorting or filesystem placement.
 
-2. Responsibilities
+The module may produce multiple ranked candidates for the same file.
 
-The module SHALL:
+---
 
-analyse fictional universes represented by an image;
-assign confidence values;
-rank candidate universes;
-store candidate observations.
+# 2. Responsibilities
 
-The module SHALL NOT:
+The module shall:
 
-identify individual characters;
-determine image quality;
-rename files;
-move files;
-modify folder structures.
-3. Scope
+* analyse images for evidence of fictional-universe membership;
+* produce one or more candidate universes where evidence supports them;
+* assign confidence values;
+* rank candidates;
+* record the version of the module/rules/model used;
+* write results to the shared database;
+* preserve the distinction between automatic analysis and later user decisions.
 
-The module attempts to recognise the fictional universe represented by an image.
+The module shall not:
 
-Typical examples include:
+* identify individual characters as its primary responsibility;
+* move, rename or delete files as part of analysis;
+* create or modify FINAL directory structure;
+* silently overwrite user decisions;
+* directly invoke another module.
 
+---
+
+# 3. Scope
+
+The module recognises fictional universes and franchises represented by images.
+
+Examples may include:
+
+```text
 Genshin Impact
 Honkai: Star Rail
 Zenless Zone Zero
@@ -61,198 +73,446 @@ Azur Lane
 Blue Archive
 Kantai Collection
 Girls' Frontline
+```
 
-The supported universe list is implementation-defined and may evolve over time.
+This list is illustrative and not a hard-coded project taxonomy.
 
-4. Input
+The supported universe catalogue may evolve independently from the module specification.
 
-The module reads:
+A universe may represent a game, anime, manga, visual novel, franchise, fictional setting or another identifiable fictional body of work.
 
-Image
-File
-Scanner metadata
-Current SHA-512
+The module may analyse content even when the image belongs to a universe not currently represented by a FINAL collection.
 
-Additionally, the module may consume observations produced by previous analysis modules.
+---
 
-Examples include:
+# 4. Module Independence
 
+Universe Analysis is independently executable once the relevant file has a valid database identity.
+
+Scanner must have discovered the file first, but Scanner does not need to be running while Universe Analysis executes.
+
+Universe Analysis does not require Character Analysis, IRL Analysis or any other module to be running.
+
+Existing results from other modules may be consumed through the database as supporting evidence.
+
+For example:
+
+```text
+Screenshot Analysis
+        ↓
+Database
+        ↓
+Universe Analysis
+```
+
+is valid, but the producing module does not create a runtime dependency.
+
+---
+
+# 5. Input
+
+The module reads the current database state for eligible files and may access the corresponding image from the filesystem when visual analysis is required.
+
+Required information includes:
+
+```text
+SHA512
+current filesystem state
+image format where available
+image dimensions where available
+```
+
+Optional supporting information may include Analysis Results from other modules, for example:
+
+```text
 Color Analysis
 Screenshot Analysis
 Reaction Analysis
 IRL Analysis
+Cosplay Analysis
+```
 
-Consumption of previous observations is optional.
+Such information is consumed through the database.
 
-The module remains independently executable.
+Its absence must not make Universe Analysis impossible unless the module's configured strategy explicitly requires it.
 
-5. Output
+---
 
-The module writes Candidate Observations.
+# 6. Output
 
-Each candidate contains:
+The module produces **Analysis Results** representing universe candidates.
 
-ImageID
-ModuleID
-Candidate
-Confidence
-Rank
-Timestamp
+A candidate should contain at least:
 
-Multiple candidates may be stored for the same image.
+```text
+file identity / SHA512
+module
+module version
+classification type = UNIVERSE
+candidate value
+confidence
+rank where applicable
+timestamp
+analysis/model/rule version
+```
 
-6. Candidate Selection
+Multiple candidates may exist for the same file and classification context.
 
-Candidates shall be ordered by descending confidence.
+Candidate results are analysis evidence, not final user decisions.
 
-Only candidates meeting or exceeding the configured confidence threshold shall be stored.
+---
 
-Default threshold:
+# 7. Candidate Ranking and Thresholds
 
-0.50
+Candidates should be ordered by descending confidence or another explicitly documented ranking score.
 
-The threshold shall be configurable.
+The module may store multiple candidates rather than forcing a single answer when uncertainty exists.
 
-The module shall not artificially limit the number of stored candidates.
+The minimum confidence required for storing a candidate is configurable.
 
-7. Definitions
-Universe
+The default threshold shall not be treated as a permanent architectural constant.
 
-A fictional franchise, game, anime, manga, visual novel or other identifiable fictional setting.
+A configured threshold may be used to determine whether a candidate is strong enough to enter a later workflow.
 
-Candidate
+A high-confidence candidate still does not automatically authorize movement into FINAL.
 
-A possible universe assigned to an image together with a confidence score.
+For example:
 
-Candidates represent probabilities rather than final decisions.
+```text
+Universe candidate:
+Ben 10
 
-Confidence
+Confidence:
+99.2%
+```
 
-The estimated probability that the image belongs to the specified universe.
+may be strong enough for an AI/transition workflow, but it does not authorize creation of:
 
-The confidence calculation method is implementation-defined.
+```text
+FINAL/.../Ben 10
+```
 
-8. Processing Rules
+unless that destination already exists in Collection Definition or is explicitly selected by the user.
 
-Each SHA-512 shall be analysed only once.
+---
 
-Existing candidate observations for the current SHA-512 shall prevent unnecessary reprocessing.
+# 8. AI / Transition Workspace Integration
 
-If the SHA-512 changes, previous candidate observations become obsolete and shall be recalculated.
+Universe Analysis may provide candidates to a later processing workflow such as AutoSort.
 
-9. Database Access
-
-The module reads:
-
-Image
-File
-Module
-Observation
-
-The module writes:
-
-CandidateObservation
-
-The module shall never modify observations created by other modules.
-
-10. Scan Scope
-
-The module shall support configurable scan scope.
-
-Typical examples include:
-
-Anime collection;
-TODO collection;
-User-selected directory;
-Database subset.
-
-The module shall not require processing of IRL images.
-
-11. Performance Requirements
-
-The module shall support very large collections.
-
-Repeated analysis of unchanged SHA-512 values shall be avoided.
-
-The implementation should favour efficient batch inference.
-
-12. Threading
-
-Parallel execution shall be supported.
-
-Worker thread count shall be configurable.
-
-13. Error Handling
-
-If analysis fails:
-
-processing continues;
-the error is logged;
-incomplete candidate lists shall not be stored.
-14. Logging
-
-Each execution produces a summary log.
+If a configured confidence threshold is exceeded, an authorized processing workflow may create or use a corresponding **AI/transition workspace directory** for the candidate, even when no matching FINAL directory exists.
 
 Example:
 
+```text
+Candidate:
+Ben 10
+Confidence:
+99.2%
+
+AI/Ben 10/
+```
+
+This is a working/classification proposal, not a FINAL collection definition.
+
+The creation of such a directory belongs to the authorized processing workflow, not to the analysis result itself.
+
+The analysis module does not directly create the directory merely by producing the candidate.
+
+---
+
+# 9. FINAL Destination Rules
+
+Universe Analysis shall never create new FINAL collection directories merely because a new universe is detected.
+
+Automatic final placement is valid only when:
+
+* the destination already exists;
+* the destination is represented in Collection Definition;
+* the authorized processing module has permission to perform the operation;
+* all applicable review/user-decision rules are satisfied.
+
+If no appropriate FINAL destination exists, the candidate may instead be handled through:
+
+```text
+AI / Transition workspace
+Review Queue
+Database-only result
+User-defined destination
+```
+
+The existence of a high-confidence universe candidate does not by itself change Collection Definition.
+
+---
+
+# 10. Processing Rules
+
+Universe Analysis may be executed repeatedly and independently.
+
+For a given SHA512 and module/analysis version, an existing valid current result should normally be reused when it remains applicable.
+
+Reprocessing may occur when:
+
+* the file has a different SHA512;
+* the module version changes;
+* the model, rule set or universe catalogue changes in a way that affects the result;
+* the current result is invalid or superseded;
+* the user or reprocessing system explicitly requests it.
+
+A path or filename change without a SHA512 change does not by itself invalidate the universe analysis.
+
+If the SHA512 changes, previous candidates remain associated with the previous binary identity and must not be treated as candidates for the new binary object.
+
+---
+
+# 11. Manual User Decisions
+
+A Universe Analysis result is an automatic suggestion unless explicitly converted into a user decision.
+
+If the user manually corrects the universe or final placement, the user decision becomes authoritative for the affected classification/placement context according to DOC-013.
+
+Later automatic Universe Analysis runs may produce new observations, but must not silently replace a protected manual decision.
+
+The fact that a user corrected the destination means that the selected destination is considered valid for that decision context. The system must not subsequently challenge that physical placement merely because a model predicted another location.
+
+---
+
+# 12. Review Queue Integration
+
+Universe Analysis may create Review Queue cases when:
+
+* confidence is insufficient for safe automatic handling;
+* multiple candidates remain materially plausible;
+* the proposed destination requires user approval;
+* the detected universe conflicts with an existing classification;
+* a FINAL validation case requires explicit user review.
+
+Review Queue is a user-decision mechanism and is not a second automatic classification system.
+
+A rejected or modified suggestion must not automatically become accepted during a later repeat execution merely because the model produces the same suggestion again.
+
+---
+
+# 13. FINAL Validation
+
+Universe Analysis may be configured to inspect FINAL in read-only validation mode.
+
+For example:
+
+```text
+FINAL/Anime/Winx Club/image.jpg
+        ↓
 Universe Analysis
+        ↓
+possible candidate: Ben 10
+```
 
-Started:
-2026-07-18 16:00
+The module must not move the file directly as a consequence of this result.
 
-Processed:
-92,134
+The result may instead become:
 
-Skipped:
-3,921,518
+```text
+Review Queue
+```
 
-Errors:
-4
+or a configured path report/workspace workflow.
 
-Duration:
-00:18:52
+FINAL is not assumed to be error-free, but its correction remains controlled by user decision and filesystem access policy.
 
-Detailed errors follow the summary.
+---
 
-15. Interaction with Other Modules
+# 14. Multiple Candidates
 
-The module depends only on Scanner.
+The module should preserve useful uncertainty where more than one universe is plausible.
 
-It may optionally consume observations produced by previous modules.
+Example:
 
-The module shall never invoke another module directly.
+```text
+Candidate A    0.81
+Candidate B    0.13
+Candidate C    0.04
+```
 
-Future modules, especially Character Analysis, are expected to consume Universe candidates.
+The exact number of stored candidates is implementation/configuration dependent.
 
-16. Design Philosophy
+The module must not manufacture artificial certainty merely to produce a single answer.
 
-The module is not expected to make perfect decisions.
+---
 
-Its role is to provide a ranked list of plausible universes.
+# 15. Database Access
 
-Later modules may use these candidates to reduce their own search space.
+The module reads:
 
-The module shall prefer uncertainty over false certainty.
+```text
+File
+Module
+Analysis Results
+Classification Results where relevant
+Collection configuration where required for validation
+```
 
-17. Future Extensions
+The module writes:
 
-The following capabilities are intentionally excluded from Version 1:
+```text
+Analysis Results
+Module Execution state
+appropriate File Events where explicitly required
+```
 
-scene recognition;
-event recognition;
-costume recognition;
-crossover detection;
-multiple-universe composition analysis;
-fanart source identification.
-18. Acceptance Criteria
+It must not overwrite analysis results owned by other modules or user decisions.
 
-The module shall be considered complete when it can:
+Persistent communication with other modules occurs through the shared database.
 
-identify fictional universes;
-produce ranked candidate lists;
-respect configurable confidence thresholds;
-support configurable scan scope;
-skip unchanged SHA-512 values;
-recover gracefully from processing errors;
-operate efficiently on large image collections.
-End of DOC-106
+---
+
+# 16. Performance Requirements
+
+The module shall remain suitable for very large image collections.
+
+Implementation should support:
+
+* batch inference;
+* configurable worker count;
+* efficient reuse of valid existing results;
+* optional use of cheaper supporting evidence before expensive visual inference.
+
+The module should not require the entire collection to be loaded into memory.
+
+---
+
+# 17. Threading and Resource Usage
+
+Parallel execution shall be supported.
+
+Worker count and applicable resource limits shall be configurable through the common module interface/configuration system.
+
+The module should use available resources efficiently while avoiding exhaustion of the configured memory/CPU budget.
+
+Parallel workers must not produce inconsistent database state.
+
+---
+
+# 18. Error Handling
+
+If an individual file cannot be analysed:
+
+* the error shall be logged;
+* other eligible files should continue where safe;
+* incomplete candidate results shall not be published as valid results.
+
+Typical recoverable failures include:
+
+```text
+corrupted image
+unsupported encoding
+filesystem read failure
+model/inference error
+insufficient access
+```
+
+An execution-level infrastructure failure may stop the execution if continuing would produce unsafe or invalid database state.
+
+---
+
+# 19. Logging
+
+Each execution shall create a Module Execution record and summary log according to DOC-007 and DOC-011.
+
+The summary should identify:
+
+```text
+started
+finished
+processed
+skipped
+errors
+duration
+```
+
+Where practical, detailed entries should include the file SHA512 and the candidate/result involved.
+
+---
+
+# 20. Interaction with Other Modules
+
+Universe Analysis never invokes another module directly.
+
+Its communication model is:
+
+```text
+Database
+    ↓
+Universe Analysis
+    ↓
+Database
+```
+
+Other modules may consume its results later, especially Character Analysis and AutoSort.
+
+No downstream module needs Universe Analysis to remain running.
+
+Character Analysis may use Universe candidates to reduce its own search space, but this is a database-level data dependency, not a process dependency.
+
+---
+
+# 21. Design Philosophy
+
+Universe Analysis is a probabilistic information provider.
+
+Its goal is not to force every image into a universe.
+
+The module should prefer:
+
+```text
+uncertain result
+```
+
+over:
+
+```text
+confidently wrong result
+```
+
+The confidence threshold is a workflow/configuration decision, not a universal architectural constant.
+
+The module should remain useful even when the detected universe has no existing FINAL collection.
+
+---
+
+# 22. Future Extensions
+
+Possible future capabilities include:
+
+* improved multi-universe/crossover handling;
+* scene-context analysis;
+* source-art recognition;
+* event/location context;
+* model ensembles;
+* improved candidate calibration;
+* universe catalogue management.
+
+Such extensions remain within this document when they remain logically part of universe identification. A genuinely independent function may become a separate module.
+
+---
+
+# 23. Acceptance Criteria
+
+The module is considered compliant when it can:
+
+* identify plausible fictional universes;
+* produce ranked candidate results;
+* preserve multiple candidates when useful;
+* use configurable confidence thresholds;
+* operate independently of other module processes;
+* read supporting information from the database;
+* associate results with the correct SHA512 identity;
+* reprocess when the relevant module/model/rule version requires it;
+* preserve manual user decisions;
+* support FINAL validation without directly modifying FINAL;
+* integrate with AI/transition workflows without creating FINAL directories;
+* recover from per-file errors where safe;
+* operate efficiently on large collections.
+
+---
+
+# End of DOC-106
