@@ -1,288 +1,396 @@
-DOC-105
-IRL Analysis Module
+# DOC-105
 
-Project: AI Image Framework (working title)
+# IRL Analysis Module
 
-Document: DOC-105
+**Project:** AI Image Collection Management System
 
-Module: IRL Analysis
+**Document:** DOC-105
 
-Version: 1.0 Draft
+**Module:** IRL Analysis
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-DOC-101
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
+DOC-013
 
-The IRL Analysis module determines whether an image most likely represents the real world rather than artwork or computer-generated illustration.
+---
 
-The module enriches the database with IRL-related observations.
+# 1. Purpose
 
-The module performs no file operations and makes no sorting decisions.
+The IRL Analysis module determines whether an image most likely represents real-world subject matter rather than artwork or a digitally created illustration.
 
-2. Responsibilities
+The module provides analysis results for use by other modules. It does not decide where an image belongs and does not itself move, rename or delete files.
 
-The module SHALL:
+---
 
-analyse images for real-world characteristics;
-distinguish likely photographs from illustrations;
-assign confidence values;
-write observations to the database.
+# 2. Responsibilities
 
-The module SHALL NOT:
+The module shall:
 
-classify anime;
-identify characters;
-identify universes;
-detect cosplay;
-move files;
-rename files;
-modify folder structures.
-3. Scope
+* analyse images for visual characteristics associated with real-world imagery;
+* distinguish likely photographic imagery from illustration where the available evidence supports that distinction;
+* provide confidence information where meaningful;
+* write its results to the shared database;
+* preserve the distinction between automatic analysis and later user decisions.
 
-The module determines whether an image most likely belongs to the category of real-world imagery.
+The module shall not:
+
+* identify anime characters or universes;
+* perform cosplay analysis as its primary responsibility;
+* move or rename files as part of analysis;
+* modify folder structures;
+* overwrite results owned by other modules;
+* treat its result as a filesystem command.
+
+---
+
+# 3. Scope
+
+The module evaluates whether an image is likely to represent the physical world.
 
 Typical positive examples include:
 
-people;
-animals;
-vehicles;
-buildings;
-landscapes;
-food;
-products;
-interior photographs;
-outdoor photographs.
+```text
+people
+animals
+vehicles
+buildings
+landscapes
+food
+products
+interiors
+outdoor photographs
+```
 
 Typical negative examples include:
 
-anime artwork;
-manga;
-fanart;
-CG illustrations;
-stylized game artwork;
-digital paintings.
+```text
+anime artwork
+manga
+fanart
+CG illustrations
+digital paintings
+stylized game artwork
+```
 
-The module intentionally does not distinguish between individual IRL categories.
+The module does not need to determine a detailed semantic category such as person, vehicle or landscape unless such a capability is explicitly added to this module in a future revision.
 
-4. Input
+---
 
-The module reads:
+# 4. Input
 
-Image
-File
-Scanner metadata
-Current SHA-512
+The module reads the current database state for eligible files.
 
-Image decoding is performed only when required.
+Required information includes:
 
-5. Output
+```text
+SHA512
+current filesystem state
+image format where available
+image dimensions where available
+```
 
-The module produces Observations.
+The module may access the filesystem to decode the image or obtain information required for analysis.
 
-Initial feature set:
+A valid file identity in the database is required. The module does not require Scanner to be running and does not invoke Scanner or any other module directly.
 
-IsIRL
+---
 
-LooksPhotographic
+# 5. Output
 
-LooksIllustrated
+The module produces **Analysis Results** according to DOC-005.
 
-NeedsManualReview
+Initial feature set may include:
 
-Each Observation shall contain:
+```text
+IS_IRL
+LOOKS_PHOTOGRAPHIC
+LOOKS_ILLUSTRATED
+```
 
-ImageID
-ModuleID
-Feature
-Value
-Confidence
-Timestamp
-6. Definitions
-IRL
+`NEEDS_MANUAL_REVIEW` should not be treated as an ordinary visual fact when it merely represents the module's uncertainty. Where practical, uncertainty should instead be represented through confidence and/or Review Queue according to DOC-013.
 
-An image primarily representing objects, people or environments existing in the physical world.
+Each Analysis Result should identify at least:
 
-Photographic Appearance
+```text
+file identity / SHA512
+module
+module version
+feature
+value
+confidence where applicable
+timestamp
+```
 
-Visual characteristics commonly associated with photographs.
+---
 
-The exact detection method is implementation-defined.
+# 6. Definitions
 
-Illustrated Appearance
+## IRL
+
+An image primarily representing people, objects or environments existing in the physical world.
+
+The term describes the content category used by the project; it does not imply that the image must be a camera photograph.
+
+## Photographic Appearance
+
+Visual characteristics commonly associated with photographic capture, including but not limited to natural texture, lighting and perspective.
+
+## Illustrated Appearance
 
 Visual characteristics commonly associated with manually or digitally created artwork.
 
-Manual Review
+## Uncertainty
 
-A state indicating that the module cannot determine the image category with sufficient confidence.
+A condition in which the available evidence is insufficient to make a reliable automatic decision.
 
-Manual Review is not an error.
+Uncertainty is a normal analysis outcome and is not itself an error.
 
-It represents intentional uncertainty.
+---
 
-7. Confidence
+# 7. Confidence
 
-Every Observation shall include a confidence value.
+Where a classification-like result is produced, the module should provide a confidence value.
 
-Confidence reflects the probability that the image belongs to the IRL category.
+Confidence represents the strength of the available evidence, not a user decision.
 
-The calculation method is implementation-defined.
+The exact calculation method is implementation-defined.
 
-8. Processing Rules
+Low confidence does not authorize the module to guess. Where a downstream action requires a decision, the relevant workflow shall use its configured threshold and Review Queue rules.
 
-Each SHA-512 shall be analysed only once.
+---
 
-Existing observations for the same SHA-512 shall prevent unnecessary reprocessing.
+# 8. Processing Rules
 
-If the SHA-512 changes, previous observations produced by this module become obsolete and shall be recalculated.
+The module may process the same file in multiple independent executions.
 
-9. Database Access
+For a given binary identity and a given module/analysis version, an existing valid current result should normally be reused rather than recalculated unnecessarily.
 
-The module reads:
+A new execution may recalculate results when:
 
-Image
-File
-Module
+* the file has a different SHA512;
+* the module version changed;
+* the relevant analysis rule/model version changed;
+* the existing result is invalid or superseded;
+* the user or reprocessing workflow explicitly requests recalculation.
 
-The module writes:
+A path or filename change without a SHA512 change does not by itself invalidate the analysis result.
 
-Observation
+If SHA512 changes, results belonging to the previous binary identity remain associated with that previous identity and are not silently transferred to the new binary object.
 
-The module never modifies observations created by other modules.
+---
 
-10. Scan Scope
+# 9. Scan Scope
 
-The module shall support configurable scan scope.
+The module shall support configurable processing scope.
 
-The scan scope determines which images are eligible for analysis.
+The scope may include, depending on configuration and module purpose:
 
-Examples include:
+```text
+configured source roots
+transition/AI workspace
+selected final roots for validation
+specific collection/root
+user-selected subset
+```
 
-Entire TODO tree
+The module shall not hard-code directory names or assume that `TODO`, `AI` or `FINAL` have universal physical meanings.
 
-Entire database
+Processing scope is configuration, while file eligibility is determined from current database and filesystem state.
 
-Specific directory
+---
 
-Specific collection
+# 10. Interaction with Other Modules
 
-User-selected subset
+IRL Analysis does not invoke other modules.
 
-Scope selection is provided externally.
+Its communication model is:
 
-The module shall not hardcode directory names.
+```text
+Database
+    ↓
+IRL Analysis
+    ↓
+Database
+```
 
-11. Performance Requirements
+Other modules may later read its Analysis Results.
 
-The module shall support collections containing millions of images.
+The module is execution-independent from Color Analysis, Screenshot Analysis, Reaction Analysis, Cosplay Analysis, Universe Analysis and Character Analysis.
 
-Repeated analysis of unchanged SHA-512 values shall be avoided.
+For example, the following sequence is valid:
 
-The implementation should favour efficient inference suitable for large datasets.
+```text
+IRL Analysis × 5
+Screenshot Analysis × 2
+IRL Analysis × 1
+```
 
-12. Threading
+The module may also consume documented database results from other modules when useful, without creating a runtime dependency on those modules.
+
+---
+
+# 11. Database Access
+
+The module reads information required for analysis from the shared database and may read corresponding image files.
+
+The module writes only data belonging to its documented responsibility, primarily Analysis Results and execution-related state.
+
+It must not overwrite Scanner state, unrelated analysis results or user decisions.
+
+---
+
+# 12. Performance and Resource Usage
+
+The module shall be suitable for collections containing millions of images.
+
+Implementation should favour efficient inference suitable for large datasets.
+
+Expensive visual analysis should be avoided when a cheaper valid path can establish the required result.
+
+The module should use available CPU, GPU and memory resources efficiently within configured system limits and must not require the entire collection to be held in memory.
+
+---
+
+# 13. Threading
 
 Parallel execution shall be supported.
 
-Worker thread count shall be configurable.
+Worker count shall be configurable through the common module configuration/interface.
 
-13. Error Handling
+The module must maintain database consistency when multiple workers operate concurrently.
+
+---
+
+# 14. Error Handling
 
 If an image cannot be analysed:
 
-processing shall continue;
-the error shall be logged;
-incomplete observations shall not be stored.
+* the error shall be logged according to DOC-011;
+* processing of other files should continue where safe;
+* incomplete or invalid Analysis Results shall not be published as valid results.
 
-Recoverable failures include:
+Typical recoverable failures include:
 
-corrupted image;
-unsupported encoding;
-temporary read failure.
-14. Logging
+```text
+corrupted image
+unsupported encoding
+temporary filesystem read failure
+insufficient access
+unexpected decoding/model error
+```
 
-Each execution produces a summary log.
+Uncertainty in the classification itself is not treated as a processing error.
 
-Example:
+---
 
-IRL Analysis
+# 15. Logging
 
-Started:
-2026-07-18 13:00
+Each execution shall create a Module Execution record and summary log.
 
-Processed:
-112,438
+The summary should include, where applicable:
 
-Skipped:
-4,812,001
+```text
+started
+finished
+processed
+skipped
+errors
+duration
+```
 
-Errors:
-7
+Detailed errors should identify the affected file identity/path where safe to do so.
 
-Duration:
-00:12:41
+---
 
-Detailed errors follow the summary.
+# 16. Design Philosophy
 
-15. Interaction with Other Modules
+IRL Analysis is an information-provider module.
 
-The module depends only on Scanner.
+Its purpose is to produce useful evidence while minimizing false-positive classifications.
 
-It is independent of:
+When evidence is insufficient, the module should prefer uncertainty over an unjustified positive or negative classification.
 
-Color Analysis
-Screenshot Analysis
-Reaction Image Analysis
-Universe Analysis
-Character Analysis
+The module does not decide whether an image should be removed, moved to AI, moved to FINAL or otherwise changed.
 
-Other modules may consume its observations.
+Those decisions belong to processing/user workflows that consume the analysis result.
 
-The module shall never invoke another module directly.
+---
 
-16. Design Philosophy
+# 17. Relationship with Other Analysis
 
-The IRL Analysis module is a knowledge provider.
+IRL Analysis may independently consume documented results from other analysis modules when these results improve its own analysis.
 
-It does not decide where an image belongs.
+For example, Color Analysis or Screenshot Analysis may provide supporting evidence.
 
-It provides observations that may later be combined with information from other modules.
+Such consumption occurs through the shared database and does not mean that the producing module must be executed immediately beforehand or remain running.
 
-When confidence is insufficient, the module shall prefer uncertainty over incorrect classification.
+No analysis module may directly invoke another module merely to obtain a result.
 
-17. Future Extensions
+---
 
-The following capabilities are intentionally excluded from Version 1:
+# 18. Review Queue and User Decisions
 
-cosplay detection;
-celebrity recognition;
-face identification;
-age estimation;
-object classification;
-scene classification;
-OCR;
-NSFW detection.
+If IRL Analysis produces a result whose uncertainty requires explicit user intervention for a later action, the downstream workflow may create a Review Queue item according to DOC-013.
 
-These capabilities may be implemented by dedicated modules.
+An analysis result does not itself constitute a user decision.
 
-18. Acceptance Criteria
+A later user correction has higher priority than a later automatic IRL result for the same decision context.
 
-The module shall be considered complete when it can:
+IRL Analysis must not modify or undo a user-selected filesystem destination merely because its later model output differs.
 
-distinguish likely real-world images from artwork;
-assign confidence values;
-support configurable scan scope;
-write observations to the database;
-skip unchanged SHA-512 values;
-recover gracefully from processing errors;
-operate efficiently on multi-million image collections.
-End of DOC-105
+---
+
+# 19. FINAL and AI Handling
+
+IRL Analysis does not manage final directory structures.
+
+If later processing uses the result to organize files:
+
+* existing FINAL destinations must come from Collection Definition or explicit user action;
+* AI/transition workspaces may receive new working directories when the responsible processing module is authorized to create them and its configured confidence threshold is met;
+* IRL Analysis itself does not create FINAL directories.
+
+---
+
+# 20. Future Extensions
+
+Possible future extensions include:
+
+* improved photographic/illustration discrimination;
+* specialized scene recognition;
+* source-specific photography detection;
+* additional confidence calibration;
+* improved handling of mixed photographic/illustrated content.
+
+Features that constitute a genuinely independent analysis responsibility should be documented as separate modules rather than added indiscriminately to IRL Analysis.
+
+---
+
+# 21. Acceptance Criteria
+
+The module is considered compliant when it can:
+
+* distinguish likely real-world imagery from artwork with documented confidence;
+* produce results using the current Analysis Result model;
+* associate results with the correct SHA512 binary identity;
+* reuse valid results when appropriate;
+* support independent repeated executions;
+* support configurable processing scope;
+* continue after recoverable per-file errors;
+* operate efficiently on very large collections;
+* communicate with other modules only through documented shared database state;
+* avoid modifying files or final directory structures as part of analysis.
+
+---
+
+# End of DOC-105
