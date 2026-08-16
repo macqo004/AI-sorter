@@ -8,7 +8,7 @@
 
 **Module:** Universe Analysis
 
-**Version:** 2.0
+**Version:** 2.1
 
 **Status:** Draft
 
@@ -51,7 +51,7 @@ The module shall not:
 
 * identify individual characters as its primary responsibility;
 * move, rename or delete files as part of analysis;
-* create or modify FINAL directory structure;
+* directly create or modify FINAL directory structure;
 * silently overwrite user decisions;
 * directly invoke another module.
 
@@ -172,52 +172,64 @@ The minimum confidence required for storing a candidate is configurable.
 
 The default threshold shall not be treated as a permanent architectural constant.
 
-A configured threshold may be used to determine whether a candidate is strong enough to enter a later workflow.
+A configured confidence threshold may be used to decide whether a candidate is strong enough to enter a later workflow.
 
-A high-confidence candidate still does not automatically authorize movement into FINAL.
+Confidence is not the only possible trigger for creating a useful AI workspace. A workflow may also use a **collection-level count threshold**, such as a configured minimum number of images confidently associated with the same universe within TODO/source scope.
 
-For example:
-
-```text
-Universe candidate:
-Ben 10
-
-Confidence:
-99.2%
-```
-
-may be strong enough for an AI/transition workflow, but it does not authorize creation of:
+Example:
 
 ```text
-FINAL/.../Ben 10
+TODO contains 2,500 images
+with Universe candidate = "Example Universe"
+above the configured confidence criteria
+
+Configured AI workspace count threshold = 1,000
+
+→ an AI/Example Universe/ workspace may be created
 ```
 
-unless that destination already exists in Collection Definition or is explicitly selected by the user.
+The universe does not need to exist in FINAL for this to be valid.
+
+A high-confidence individual candidate, or a sufficiently large collection of qualifying candidates, still does not authorize creation of a FINAL directory.
 
 ---
 
 # 8. AI / Transition Workspace Integration
 
-Universe Analysis may provide candidates to a later processing workflow such as AutoSort.
+Universe Analysis may provide candidates to a later processing workflow such as AutoSort or another authorized AI-workspace manager.
 
-If a configured confidence threshold is exceeded, an authorized processing workflow may create or use a corresponding **AI/transition workspace directory** for the candidate, even when no matching FINAL directory exists.
+The AI/transition tree is a working area and is not limited to universes already present in FINAL.
+
+If configured thresholds are met, an authorized workflow may create or use a corresponding **AI/transition workspace directory** for a universe detected in the source/TODO collection even when no matching FINAL directory exists.
+
+Triggers may include, depending on configuration:
+
+```text
+individual confidence threshold
+collection-level image-count threshold
+combination of confidence and count thresholds
+other explicitly configured criteria
+```
 
 Example:
 
 ```text
-Candidate:
-Ben 10
-Confidence:
-99.2%
-
+TODO
+    ↓
+Universe Analysis
+    ↓
+large number of images identified as "Ben 10"
+    ↓
+configured workspace threshold exceeded
+    ↓
 AI/Ben 10/
 ```
 
-This is a working/classification proposal, not a FINAL collection definition.
+This is a working/classification area, not a FINAL collection definition.
 
-The creation of such a directory belongs to the authorized processing workflow, not to the analysis result itself.
+The analysis result itself does not directly create the directory; an authorized workflow performs the filesystem operation using the configured AI/transition access policy.
 
-The analysis module does not directly create the directory merely by producing the candidate.
+The AI workspace may therefore contain universes, classifications or work groups that have no current representation in FINAL.
 
 ---
 
@@ -241,7 +253,7 @@ Database-only result
 User-defined destination
 ```
 
-The existence of a high-confidence universe candidate does not by itself change Collection Definition.
+The existence of a high-confidence universe candidate or a large qualifying candidate set does not by itself change Collection Definition.
 
 ---
 
@@ -477,6 +489,8 @@ The confidence threshold is a workflow/configuration decision, not a universal a
 
 The module should remain useful even when the detected universe has no existing FINAL collection.
 
+The AI workspace is explicitly permitted to contain emerging universes that have no FINAL representation yet, provided the configured criteria for creating that workspace are met.
+
 ---
 
 # 22. Future Extensions
@@ -489,7 +503,8 @@ Possible future capabilities include:
 * event/location context;
 * model ensembles;
 * improved candidate calibration;
-* universe catalogue management.
+* universe catalogue management;
+* collection-level grouping and threshold strategies for AI workspace creation.
 
 Such extensions remain within this document when they remain logically part of universe identification. A genuinely independent function may become a separate module.
 
@@ -503,13 +518,14 @@ The module is considered compliant when it can:
 * produce ranked candidate results;
 * preserve multiple candidates when useful;
 * use configurable confidence thresholds;
+* support configured collection-level thresholds for AI workspace creation;
+* permit AI/transition workspaces for universes not yet represented in FINAL;
 * operate independently of other module processes;
 * read supporting information from the database;
 * associate results with the correct SHA512 identity;
 * reprocess when the relevant module/model/rule version requires it;
 * preserve manual user decisions;
 * support FINAL validation without directly modifying FINAL;
-* integrate with AI/transition workflows without creating FINAL directories;
 * recover from per-file errors where safe;
 * operate efficiently on large collections.
 
