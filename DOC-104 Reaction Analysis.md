@@ -1,277 +1,370 @@
-DOC-104
-Reaction Image Analysis Module
+# DOC-104
 
-Project: AI Image Framework (working title)
+# Reaction Image Analysis Module
 
-Document: DOC-104
+**Project:** AI Image Collection Management System
 
-Module: Reaction Image Analysis
+**Document:** DOC-104
 
-Version: 1.0 Draft
+**Module:** Reaction Image Analysis
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-DOC-101
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
 
-The Reaction Image Analysis module identifies images that are unlikely to be useful for artwork classification.
+---
 
-The module detects images commonly used as reactions, emojis or utility graphics.
+# 1. Purpose
 
-Its purpose is to enrich the database with observations that may later be used by AutoSort or other decision-making components.
+The Reaction Image Analysis module identifies images that are primarily intended for reactions, communication, emotes, emojis or simple utility use rather than ordinary artwork classification.
 
-The module never moves, renames or deletes files.
+The module produces analysis results for later modules. It does not itself decide whether an image should be removed, moved or excluded from the collection.
 
-2. Responsibilities
+---
 
-The module SHALL:
+# 2. Responsibilities
 
-analyse images for reaction-image characteristics;
-detect emojis and emotes;
-detect small utility graphics;
-detect images primarily intended for online communication;
-write observations to the database;
-assign confidence values.
+The module shall:
 
-The module SHALL NOT:
+* analyse images for reaction-image characteristics;
+* detect emoji- or emote-like graphics where supported;
+* detect simple utility graphics where supported;
+* detect visual patterns strongly associated with reaction images;
+* write its results to the shared database;
+* provide confidence information where meaningful;
+* preserve the distinction between automatic analysis and later user decisions.
 
-detect anime characters;
-detect universes;
-detect screenshots;
-detect real-life photographs;
-detect image quality;
-modify filesystem contents.
-3. Scope
+The module shall not:
 
-The module analyses whether an image belongs to the category of reaction or utility graphics.
+* identify anime characters or universes;
+* perform screenshot classification as its primary responsibility;
+* determine whether an image is an IRL photograph;
+* move, rename or delete files as part of analysis;
+* modify results owned by other modules;
+* create or modify FINAL directory structures.
+
+---
+
+# 3. Scope
+
+The module evaluates whether an image belongs to the broad category of reaction or utility graphics.
 
 Typical examples include:
 
-Discord emoji;
-Twitch emotes;
-reaction faces;
-sticker-like graphics;
-internet reaction images;
-simplified expressive faces.
+```text
+reaction faces
+Discord-style emoji
+Twitch-style emotes
+sticker-like graphics
+simple expressive graphics
+small utility graphics
+internet reaction images
+```
 
-The module does not attempt to determine the origin or meaning of the reaction.
+The module does not need to determine the original source platform or cultural meaning of a reaction image.
 
-4. Input
+A result such as `IS_REACTION_IMAGE = TRUE` is an analysis result, not an instruction to remove or move the file.
 
-The module reads:
+---
 
-Image
-File
-Scanner metadata
-Current SHA-512
+# 4. Input
 
-Image decoding is performed only when required.
+The module reads the current database state for eligible files.
 
-5. Output
+Required information includes:
 
-The module produces Observations.
+```text
+SHA512
+current filesystem state
+image format where available
+image dimensions where available
+```
 
-Initial feature set:
+The module may access the filesystem to decode the image or obtain information required for analysis.
 
-IsReactionImage
+The module requires a valid file identity in the database. It does not require Scanner to be running and does not invoke Scanner or any other module directly.
 
-IsEmoji
+---
 
-IsEmote
+# 5. Output
 
-HasMinimalScene
+The module produces **Analysis Results** as defined by DOC-005.
 
-HasSingleSubject
+Initial feature set may include:
 
-HasLargeTransparentArea
+```text
+IS_REACTION_IMAGE
+IS_EMOJI
+IS_EMOTE
+HAS_MINIMAL_SCENE
+HAS_SINGLE_SUBJECT
+HAS_LARGE_TRANSPARENT_AREA
+IS_UTILITY_IMAGE
+```
 
-IsUtilityImage
+Not every feature must be populated for every file. A feature is used only where the module has sufficient evidence to evaluate it.
 
-Each Observation shall contain:
+An Analysis Result should identify at least:
 
-ImageID
-ModuleID
-Feature
-Value
-Confidence
-Timestamp
-6. Definitions
-Reaction Image
+```text
+file identity / SHA512
+module
+module version
+feature
+value
+confidence where applicable
+timestamp
+```
 
-An image primarily intended to express emotion, opinion or reaction during online communication.
+---
 
-Typical examples:
+# 6. Definitions
 
-reaction memes;
-expressive faces;
-animated sticker frames;
-internet reaction graphics.
-Emoji
+## Reaction Image
 
-A small symbolic image intended to represent an emotion, object or concept.
+An image primarily intended to express emotion, opinion or reaction in a communication context.
 
-Emote
+Typical examples include expressive faces, reaction graphics and simple reaction memes.
 
-A platform-specific reaction image used in online communities.
+## Emoji
 
-Examples include:
+A small symbolic graphic representing an emotion, object or concept.
 
-Discord
-Twitch
-YouTube
-Slack
-Utility Image
+## Emote
 
-A non-illustrative image created primarily for communication rather than artistic presentation.
+A platform or community-specific reaction graphic used as a communication element.
 
-Minimal Scene
+Examples may include Discord, Twitch, YouTube or Slack style emotes.
 
-An image containing little or no environmental context.
+## Utility Image
 
-Typically consists of:
+A graphic primarily created for communication or practical use rather than ordinary artwork presentation.
 
-single object;
-single face;
-isolated symbol;
-transparent background.
-7. Confidence
+## Minimal Scene
 
-Every Observation shall include a confidence value.
+An image containing little environmental context, often consisting primarily of one object, face, symbol or isolated subject.
 
-Confidence represents the module's certainty.
+These characteristics are supporting evidence and do not by themselves define a reaction image.
 
-The calculation method is implementation-defined.
+---
 
-8. Processing Rules
+# 7. Confidence
 
-The module analyses each unique SHA-512 only once.
+Where the module produces a classification-like result, it should provide a confidence value.
 
-Existing observations for the current SHA-512 shall prevent unnecessary reprocessing.
+Confidence represents the strength of the module's evidence, not a user decision.
 
-If the SHA-512 changes, observations produced by this module become obsolete and shall be recalculated.
+The exact calculation method is implementation-defined.
 
-9. Database Access
+A high-confidence reaction classification does not authorize the module to move or delete the file.
 
-The module reads:
+---
 
-Image
-File
-Module
+# 8. Processing Rules
 
-The module writes:
+The module may process the same file in multiple independent executions.
 
-Observation
+For a given binary identity and a given module/analysis version, an existing valid current result should normally be reused rather than recalculated unnecessarily.
 
-The module never modifies Scanner data.
+A new execution may recalculate results when:
 
-10. Performance Requirements
+* the file has a different SHA512;
+* the module version changed;
+* the relevant analysis rule/model version changed;
+* the existing result is invalid or superseded;
+* the user or reprocessing system explicitly requests recalculation.
 
-The module shall be suitable for collections containing millions of images.
+A change of path or filename without a SHA512 change does not by itself invalidate the analysis result.
 
-Implementation shall prioritise computationally inexpensive methods before more expensive image analysis.
+If the SHA512 changes, results belonging to the previous binary identity remain historical and do not become results for the new binary object.
 
-Repeated processing of identical SHA-512 values shall be avoided.
+---
 
-11. Threading
+# 9. Database Access
+
+The module reads information required for analysis from the shared database and may read the corresponding image from the filesystem.
+
+The module writes only data belonging to its documented analysis responsibility, primarily Analysis Results and execution-related state.
+
+It must not overwrite Scanner state, another module's analysis results or user decisions.
+
+---
+
+# 10. Performance Requirements
+
+The module shall remain suitable for collections containing millions of images.
+
+Implementation should prefer inexpensive and reliable evidence before more expensive visual analysis where practical.
+
+Repeated processing of a binary identity with an already valid current result should be avoided unless reprocessing is required.
+
+The module should not require the entire collection to be loaded into memory.
+
+---
+
+# 11. Threading and Resource Usage
 
 Parallel execution shall be supported.
 
-The number of worker threads shall be configurable.
+The worker count shall be configurable according to the common module interface.
 
-12. Error Handling
+The module should use available resources efficiently without exhausting configured system limits.
 
-If analysis cannot be completed:
+Parallel processing must not produce conflicting database or filesystem operations.
 
-processing of other images shall continue;
-the error shall be logged;
-incomplete observations shall not be stored.
-13. Logging
+---
 
-Each execution produces a summary log.
+# 12. Error Handling
 
-Example:
+If a file cannot be analysed:
 
+* the error shall be logged according to DOC-011;
+* processing of other files should continue where safe;
+* incomplete or invalid Analysis Results shall not be published as valid results.
+
+Typical recoverable errors include:
+
+```text
+unsupported image encoding
+corrupted image
+filesystem read failure
+insufficient access
+unexpected decoding error
+```
+
+---
+
+# 13. Logging
+
+Each execution shall create a Module Execution record and a summary log.
+
+The summary should include, where applicable:
+
+```text
+started
+finished
+processed
+skipped
+errors
+duration
+```
+
+Detailed errors should identify the affected file identity/path where safe to do so.
+
+---
+
+# 14. Interaction with Other Modules
+
+The module does not invoke other modules.
+
+Its communication model is:
+
+```text
+Database
+    ↓
 Reaction Analysis
+    ↓
+Database
+```
 
-Started:
-2026-07-18 12:00
+Other modules may later read its Analysis Results from the database.
 
-Processed:
-24,318
+The module is independent from Color Analysis, Screenshot Analysis, IRL Analysis, Universe Analysis and Character Analysis at execution level.
 
-Skipped:
-4,945,210
+Another module may use Reaction Analysis results as input without requiring Reaction Analysis to be running.
 
-Errors:
-1
+---
 
-Duration:
-00:02:04
+# 15. Design Philosophy
 
-Detailed errors shall follow the summary.
+The module is an information provider.
 
-14. Performance Philosophy
+Its primary objective is to provide useful evidence about reaction/utility graphics while minimizing false positives.
 
-The implementation shall prefer lightweight heuristics capable of identifying obvious reaction images with high confidence.
+When evidence is weak or ambiguous, the module should prefer an uncertain or negative analysis result over an overconfident classification.
 
-Complex semantic understanding is intentionally excluded from Version 1.
+Where a decision has material consequences for the collection, later processing should use Review Queue according to DOC-013 rather than treating an analysis result as an automatic command.
 
-15. Interaction with Other Modules
+---
 
-The module depends only on Scanner.
+# 16. Scope Boundaries
 
-It is completely independent of:
+The following are intentionally outside the core responsibility of Version 2.0:
 
-Color Analysis
-Screenshot Analysis
-IRL Analysis
-Universe Analysis
-Character Analysis
+* full meme-template recognition;
+* OCR-based caption interpretation;
+* internet-platform provenance detection;
+* detailed semantic interpretation of reaction meaning;
+* complete animated media understanding;
+* broad social-media classification.
 
-Other modules may consume its observations.
+Such functionality may be added later if it remains logically part of reaction/utility analysis; otherwise it may be assigned to a separate module.
 
-The module shall never invoke another module directly.
+---
 
-16. Design Philosophy
+# 17. Relationship with Color and Screenshot Analysis
 
-The purpose of this module is not to identify every possible meme.
+Reaction Analysis may independently use information produced by other analysis modules when such information is useful and documented as an input.
 
-Its goal is to remove obvious non-artwork images from later processing stages by providing reliable observations.
+For example, a future implementation may use Color Analysis results as supporting evidence.
 
-When uncertainty exists, the module should prefer leaving the image unclassified rather than producing a false positive.
+This does not create a runtime dependency. The producing module does not need to be running.
 
-17. Future Extensions
+The relevant data is consumed from the database.
 
-The following capabilities are intentionally excluded from Version 1:
+---
 
-meme template recognition;
-OCR;
-caption analysis;
-internet meme classification;
-social-media specific detection;
-animated GIF analysis;
-comic strip recognition.
+# 18. FINAL and AI Handling
 
-These capabilities may be implemented by separate modules in future versions.
+Reaction Analysis does not decide where files belong.
 
-18. Acceptance Criteria
+If a later processing module uses Reaction Analysis results to move or regroup files:
 
-The module shall be considered complete when it can:
+* FINAL destinations must come from the configured Collection Definition or explicit user action;
+* AI/transition workspaces may be extended with new working folders when the relevant module is authorized and its configured confidence threshold is met;
+* no analysis result by itself creates a new FINAL directory.
 
-detect common reaction images;
-detect emojis;
-detect emotes;
-detect simple utility graphics;
-write observations to the database;
-skip previously analysed SHA-512 values;
-recover gracefully from processing errors;
-process very large image collections efficiently.
-End of DOC-104
+---
+
+# 19. Future Extensions
+
+Possible future extensions include:
+
+* better emote detection;
+* platform-specific recognition;
+* animated reaction analysis;
+* meme-template assistance;
+* OCR-assisted reaction detection;
+* improved small-graphic classification.
+
+Extensions should remain within the module's logical responsibility unless they introduce a genuinely independent function.
+
+---
+
+# 20. Acceptance Criteria
+
+The module is considered compliant when it can:
+
+* identify common reaction and utility image characteristics;
+* write results using the current Analysis Result model;
+* associate results with the correct SHA512 binary identity;
+* reuse valid existing results where appropriate;
+* support independent repeated executions;
+* continue after recoverable per-file failures;
+* avoid modifying files as part of analysis;
+* provide useful confidence information where applicable;
+* operate on very large collections;
+* expose results to other modules through the shared database rather than direct module-to-module communication.
+
+---
+
+# End of DOC-104
