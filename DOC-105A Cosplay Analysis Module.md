@@ -1,283 +1,410 @@
-DOC-105A
-Cosplay Analysis Module
+# DOC-105A
 
-Project: AI Image Framework (working title)
+# Cosplay Analysis Module
 
-Document: DOC-105A
+**Project:** AI Image Collection Management System
 
-Module: Cosplay Analysis
+**Document:** DOC-105A
 
-Version: 1.0 Draft
+**Module:** Cosplay Analysis
 
-Status: Draft
+**Version:** 2.0
 
-Depends on
+**Status:** Draft
 
-DOC-001
-DOC-002
-DOC-003
-DOC-004
+**Depends on:**
+
 DOC-005
-DOC-006
-DOC-101
-1. Purpose
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
+DOC-013
 
-The Cosplay Analysis module identifies images that most likely depict cosplay.
+---
 
-Its purpose is to enrich the database with cosplay-related observations.
+# 1. Purpose
 
-The module performs no file operations and makes no sorting decisions.
+The Cosplay Analysis module determines whether an image most likely depicts cosplay.
 
-Although the module is commonly expected to analyse images previously identified as IRL, it shall remain fully independent and may analyse any image collection selected by the user.
+Cosplay is closely related to IRL analysis, but it is maintained as a separate module because it represents a distinct analytical problem with its own evidence, thresholds and downstream uses.
 
-2. Responsibilities
+The module produces analysis results for use by other modules or later decision-making workflows.
 
-The module SHALL:
+It does not itself decide where an image belongs.
 
-analyse images for cosplay characteristics;
-detect likely costume-based character representations;
-assign confidence values;
-write observations to the database.
+---
 
-The module SHALL NOT:
+# 2. Relationship with IRL Analysis
 
-identify specific characters;
-identify anime universes;
-identify photographers;
-classify image quality;
-move files;
-rename files;
-modify folder structures.
-3. Scope
+Cosplay is a specialized subcategory of real-world imagery, but Cosplay Analysis is **not functionally dependent on IRL Analysis**.
+
+The module may be run:
+
+```text
+IRL → Cosplay
+```
+
+when the user wants to limit work to likely real-world images.
+
+It may also be run independently on:
+
+```text
+TODO
+AI / Transition
+FINAL validation scope
+specific directories
+user-selected subsets
+```
+
+The absence of an IRL result must not prevent Cosplay Analysis from running when the selected scope permits it.
+
+The module may consume an existing IRL result as supporting evidence when this is documented by the implementation, but IRL Analysis does not need to be running and does not create a runtime dependency.
+
+---
+
+# 3. Responsibilities
+
+The module shall:
+
+* analyse images for cosplay characteristics;
+* detect visual evidence consistent with intentional character-based costume presentation;
+* provide confidence information where meaningful;
+* write its results to the shared database;
+* preserve the distinction between automatic analysis and user decisions.
+
+The module shall not:
+
+* identify the specific character as its primary responsibility;
+* identify the universe or franchise as its primary responsibility;
+* identify the photographer;
+* move, rename or delete files as part of analysis;
+* modify results owned by other modules;
+* modify FINAL directory structure.
+
+---
+
+# 4. Scope
 
 The module determines whether an image most likely represents cosplay.
 
 Typical positive examples include:
 
-convention cosplay;
-studio cosplay;
-outdoor cosplay;
-event photography;
-staged character photography.
+```text
+convention cosplay
+studio cosplay
+outdoor cosplay
+event photography
+staged character photography
+```
 
 Typical negative examples include:
 
-ordinary portraits;
-fashion photography;
-anime artwork;
-digital illustrations;
-game screenshots;
-ordinary costumes unrelated to fictional characters.
-4. Input
+```text
+ordinary portraits
+fashion photography
+anime artwork
+digital illustrations
+game screenshots
+ordinary costumes unrelated to fictional characters
+```
 
-The module reads:
+The module is concerned with the **presence of cosplay**, not with proving the identity of the represented character.
 
-Image
-File
-Scanner metadata
-Current SHA-512
+---
 
-Image decoding is performed only when required.
+# 5. Input
 
-5. Output
+The module reads the current database state for eligible files.
 
-The module produces Observations.
+Required information includes:
 
-Initial feature set:
+```text
+SHA512
+current filesystem state
+image format where available
+image dimensions where available
+```
 
-IsCosplay
+The module may access the corresponding image from the filesystem when visual analysis requires it.
 
-LooksLikeCostume
+It requires a valid file identity in the database.
 
-LooksLikeCharacterInspiredClothing
+It does not require Scanner to be running and never invokes Scanner or another module directly.
 
-LooksLikeConvention
+---
 
-LooksLikeStudioCosplay
+# 6. Output
 
-NeedsManualReview
+The module produces **Analysis Results** as defined by DOC-005.
 
-Each Observation shall contain:
+Initial feature set may include:
 
-ImageID
-ModuleID
-Feature
-Value
-Confidence
-Timestamp
-6. Definitions
-Cosplay
+```text
+IS_COSPLAY
+LOOKS_LIKE_COSTUME
+LOOKS_CHARACTER_INSPIRED
+LOOKS_LIKE_CONVENTION
+LOOKS_LIKE_STUDIO_COSPLAY
+```
 
-A photograph depicting a person intentionally dressed to resemble a fictional character.
+Not every feature must be populated for every file.
 
-Recognition of the specific character is outside the scope of this module.
+An Analysis Result should identify at least:
 
-Costume
+```text
+file identity / SHA512
+module
+module version
+feature
+value
+confidence where applicable
+timestamp
+```
 
-Clothing or accessories that significantly differ from ordinary everyday fashion and appear intentionally designed to represent a fictional character.
+A feature such as `LOOKS_LIKE_COSTUME` is supporting evidence. It is not by itself a final cosplay classification.
 
-Character-Inspired Clothing
+---
 
-Clothing that resembles the style of a fictional character but may not constitute full cosplay.
+# 7. Definitions
 
-This observation provides supporting evidence only.
+## Cosplay
 
-Convention
+A real-world image depicting a person intentionally presenting an appearance associated with a fictional character, usually through clothing, accessories, makeup, props or styling.
 
-A photograph likely taken during an event where cosplay is commonly present.
+Recognition of the specific character is outside the core responsibility of this module.
 
-The module does not identify specific events.
+## Costume Evidence
 
-Studio Cosplay
+Visual evidence indicating deliberate character-oriented clothing, accessories or styling.
 
-A cosplay photograph likely created in a controlled photographic environment.
+## Character-Inspired Appearance
 
-Manual Review
+An appearance resembling a fictional character without sufficient evidence to establish full cosplay.
 
-A state indicating insufficient confidence for automatic classification.
+This is supporting evidence rather than a final classification.
 
-Manual Review is an expected outcome rather than an error.
+## Convention Evidence
 
-7. Confidence
+Visual or environmental evidence suggesting that the image was captured at an event where cosplay is commonly present.
 
-Every Observation shall include a confidence value.
+The module does not need to identify the specific event.
 
-Confidence represents the probability that the image depicts cosplay.
+## Studio Cosplay
 
-The confidence calculation method is implementation-defined.
+Cosplay imagery likely produced in a controlled photographic environment.
 
-8. Processing Rules
+Studio characteristics are supporting evidence and do not independently prove cosplay.
 
-Each unique SHA-512 shall be analysed only once.
+---
 
-Existing observations for the current SHA-512 shall prevent unnecessary reprocessing.
+# 8. Confidence
 
-If the SHA-512 changes, observations produced by this module become obsolete and shall be recalculated.
+Where the module produces a classification-like result, it should provide a confidence value.
 
-9. Database Access
+Confidence represents the strength of the evidence that the image depicts cosplay.
 
-The module reads:
+It is not a user decision.
 
-Image
-File
-Module
+The exact calculation method is implementation-defined.
 
-The module writes:
+A low-confidence result should normally remain an analysis result rather than becoming an automatic placement decision.
 
-Observation
+Where the module cannot safely distinguish cosplay from ordinary photography, Review Queue may be used according to DOC-013.
 
-The module never modifies observations created by other modules.
+---
 
-10. Scan Scope
+# 9. Processing Rules
 
-The module shall support configurable scan scope.
+The module may be executed repeatedly and independently.
 
-Typical usage examples include:
+For a given binary identity and module/analysis version, an existing valid current result should normally be reused instead of recalculated unnecessarily.
 
-complete TODO collection;
-IRL collection;
-user-selected directory;
-specific database subset.
+Reprocessing may occur when:
 
-Scope selection is provided externally and shall never be hardcoded.
+* the file has a different SHA512;
+* the module version changed;
+* the relevant analysis rule/model version changed;
+* the current result is invalid or superseded;
+* the user or reprocessing system explicitly requests recalculation.
 
-11. Performance Requirements
+A rename or move without a SHA512 change does not by itself invalidate the analysis.
 
-The module shall support very large image collections.
+If the SHA512 changes, results belonging to the previous binary identity remain associated with that previous identity and must not be treated as results for the new binary object.
 
-Repeated analysis of identical SHA-512 values shall be avoided.
+---
 
-Implementation should prioritise efficient inference suitable for batch processing.
+# 10. Database Access
 
-12. Threading
+The module reads information needed for analysis from the shared database and may read the corresponding image from the filesystem.
+
+The module writes only data belonging to its documented responsibility, primarily Analysis Results and execution-related state.
+
+It must not overwrite Scanner state, another module's analysis results or user decisions.
+
+---
+
+# 11. Performance Requirements
+
+The module shall remain suitable for collections containing millions of images.
+
+Implementation should use efficient inference appropriate for batch processing and should avoid expensive processing when reliable existing results can be reused.
+
+The module should not require the entire collection to be loaded into memory.
+
+---
+
+# 12. Threading and Resource Usage
 
 Parallel execution shall be supported.
 
-The number of worker threads shall be configurable.
+The worker count shall be configurable according to the common module interface.
 
-13. Error Handling
+The module should use available system resources efficiently without exhausting configured limits.
 
-If an image cannot be analysed:
+Parallel execution must not create conflicting database or filesystem operations.
 
-processing shall continue;
-the error shall be logged;
-incomplete observations shall not be stored.
-14. Logging
+---
 
-Each execution produces a summary log.
+# 13. Error Handling
 
-Example:
+If analysis of an individual file cannot be completed:
 
+* the error shall be logged according to DOC-011;
+* processing of other eligible files should continue where safe;
+* incomplete or invalid results shall not be published as valid Analysis Results.
+
+Typical recoverable errors include:
+
+```text
+unsupported image encoding
+corrupted image
+filesystem read failure
+insufficient access
+unexpected decoding error
+```
+
+---
+
+# 14. Logging
+
+Each execution shall create a Module Execution record and summary log.
+
+The summary should include, where applicable:
+
+```text
+started
+finished
+processed
+skipped
+errors
+duration
+```
+
+Detailed errors should identify the affected file identity/path where safe.
+
+---
+
+# 15. Interaction with Other Modules
+
+The module does not invoke other modules directly.
+
+Its communication model is:
+
+```text
+Database
+    ↓
 Cosplay Analysis
+    ↓
+Database
+```
 
-Started:
-2026-07-18 14:00
+Other modules may consume its Analysis Results later.
 
-Processed:
-18,241
+The module is executionally independent of:
 
-Skipped:
-812,504
-
-Errors:
-2
-
-Duration:
-00:03:58
-
-Detailed errors follow the summary.
-
-15. Interaction with Other Modules
-
-The module depends only on Scanner.
-
-It is independent of:
-
+```text
 Color Analysis
 Screenshot Analysis
-Reaction Image Analysis
+Reaction Analysis
 IRL Analysis
 Universe Analysis
 Character Analysis
+```
 
-The module may be executed after IRL Analysis for improved performance, but this is a workflow optimisation rather than a functional requirement.
+IRL Analysis may be used as a practical pre-filter, but this is a workflow optimization rather than a dependency.
 
-The module shall never invoke another module directly.
+---
 
-16. Design Philosophy
+# 16. Design Philosophy
 
-The module is responsible only for determining whether an image likely depicts cosplay.
+Cosplay Analysis is an information provider.
 
-It does not identify characters, universes or franchises.
+Its purpose is to provide useful evidence that a real-world image depicts cosplay while minimizing false positives.
 
-When uncertainty exists, the module shall prefer manual review over incorrect automatic classification.
+The module should prefer uncertainty over an overconfident classification when evidence is ambiguous.
 
-The module is intended to reduce the amount of manual work while maintaining a low false-positive rate.
+A cosplay result does not itself determine the final collection location.
 
-17. Future Extensions
+---
 
-The following capabilities are intentionally excluded from Version 1:
+# 17. Review Queue Integration
 
-character identification;
-franchise identification;
-prop recognition;
-wig classification;
-costume quality assessment;
-photographer identification;
-convention identification;
-pose recognition.
+Where the module cannot determine cosplay status with sufficient confidence, it may create a Review Queue case according to DOC-013.
 
-These capabilities may be implemented as separate modules in future versions.
+A Review Queue suggestion is not a filesystem command.
 
-18. Acceptance Criteria
+A user decision remains authoritative for the relevant decision context.
 
-The module shall be considered complete when it can:
+Manual correction of cosplay status must not be silently overwritten by later automatic processing for the same protected context.
 
-identify likely cosplay images;
-distinguish cosplay from ordinary photography with reasonable confidence;
-support configurable scan scope;
-write observations to the database;
-skip previously analysed SHA-512 values;
-recover gracefully from processing errors;
-operate efficiently on large image collections.
-End of DOC-105A
+---
+
+# 18. FINAL and AI Handling
+
+Cosplay Analysis does not decide physical placement.
+
+If a later processing module uses cosplay results:
+
+* automatic movement into FINAL is allowed only where the destination already exists in Collection Definition and the applicable module is authorized to perform the move;
+* a new FINAL directory must not be created automatically by the analysis module;
+* AI/transition workspaces may be extended with new working directories when an authorized processing workflow permits it and its configured confidence threshold is met.
+
+---
+
+# 19. Future Extensions
+
+Possible future extensions include:
+
+* improved costume evidence detection;
+* prop detection;
+* wig/hairpiece analysis;
+* convention-context analysis;
+* pose/context analysis;
+* stronger distinction between cosplay and ordinary costume photography.
+
+Character identification, universe identification and photographer identification may be handled by other modules.
+
+Future extensions should remain inside this module when they are still part of the single logical responsibility of cosplay detection.
+
+---
+
+# 20. Acceptance Criteria
+
+The module is considered compliant when it can:
+
+* identify likely cosplay images;
+* distinguish cosplay from ordinary photography with useful confidence;
+* operate on user-selected scopes without requiring IRL Analysis to run first;
+* write results using the Analysis Result model;
+* associate results with the correct SHA512 binary identity;
+* support independent repeated executions;
+* continue after recoverable per-file failures;
+* avoid modifying files as part of analysis;
+* expose results to other modules through the shared database;
+* preserve user decisions through Review Queue and manual override rules.
+
+---
+
+# End of DOC-105A
