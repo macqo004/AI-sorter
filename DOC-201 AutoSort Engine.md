@@ -8,7 +8,7 @@
 
 **Module:** AutoSort Engine
 
-**Version:** 2.1
+**Version:** 2.2
 
 **Status:** Draft
 
@@ -17,6 +17,7 @@
 DOC-005
 DOC-007
 DOC-008
+DOC-009
 DOC-010
 DOC-011
 DOC-012
@@ -24,16 +25,18 @@ DOC-013
 DOC-106
 DOC-107
 DOC-108
-DOC-301
+DOC-109
 DOC-302
 
 ---
 
 # 1. Purpose
 
-AutoSort is the decision and filesystem-execution layer that applies existing database classifications and collection rules to the physical location of files.
+AutoSort Engine is the decision and execution layer responsible for applying existing database information to the physical collection structure.
 
-AutoSort does not perform image analysis. It evaluates existing database information and performs authorised placement changes.
+AutoSort does not perform image analysis and does not invent semantic classifications.
+
+It evaluates existing Analysis Results, Classification Results, Collection Definition, Directory Access Policy and user decisions, then performs authorised filesystem operations.
 
 ---
 
@@ -41,15 +44,21 @@ AutoSort does not perform image analysis. It evaluates existing database informa
 
 ```text
 Analysis Modules
-      ↓
-Database
-      ↓
-AutoSort
-      ↓
-Filesystem
+       ↓
+    Database
+       ↓
+   AutoSort
+       ↓
+Physical Organisation
 ```
 
-AutoSort does not invent classifications. Its decisions are based on documented database results, configured thresholds, Collection Definition, Directory Access Policy and protected user decisions.
+The database provides the classification knowledge.
+
+Collection Definition provides the configured collection structure and eligible destinations.
+
+User decisions provide authoritative overrides where applicable.
+
+AutoSort applies these inputs; it does not replace the analysis modules that produced them.
 
 ---
 
@@ -57,23 +66,27 @@ AutoSort does not invent classifications. Its decisions are based on documented 
 
 AutoSort shall:
 
-* evaluate database classifications and analysis results;
-* determine an eligible destination according to configured placement rules;
+* evaluate relevant database classifications and analysis results;
+* determine an eligible destination according to configured priority rules;
 * move files when authorised;
-* maintain one canonical physical copy of each file;
-* preserve manual decisions;
-* prevent unwanted automatic loops;
+* create authorised AI workspace directories when the configured workflow permits them;
+* create authorised Set directories inside AI or an already established primary collection path when required;
+* maintain one canonical physical copy of each binary file;
+* prevent repeated automatic moves from undoing protected user decisions;
 * record performed actions;
 * support repeated independent executions;
-* identify files whose current location is superseded by a higher-priority valid classification.
+* identify files whose current location is superseded by a higher-priority valid classification;
+* reconcile existing physical organisation with current database state.
 
 AutoSort shall not:
 
 * perform image analysis;
 * calculate SHA512;
-* rewrite analysis results owned by other modules;
-* create duplicate copies, shortcuts or hardlinks;
-* create arbitrary FINAL directories merely from analysis results.
+* rewrite another module's analysis results;
+* create duplicate physical files;
+* create shortcuts or hardlinks as alternative collection copies;
+* automatically extend the primary collection definition;
+* arbitrarily invent new FINAL collection branches.
 
 ---
 
@@ -87,67 +100,51 @@ one binary object
 one canonical physical location
 ```
 
-Multiple logical classifications may exist in the database, but the filesystem contains one canonical physical instance.
+A file must not be intentionally duplicated across primary collection trees, Theme trees, AI workspaces or other classification trees.
+
+The database may contain multiple classifications and analysis results for the same file, but the filesystem contains one canonical physical instance.
 
 ---
 
-# 5. Database as Decision Source
+# 5. Database and Collection Definition
 
-The database is the authoritative source of classification information and user decisions.
+The database is the authoritative source of analysis and classification information.
 
-The current filesystem path describes the physical state. AutoSort reconciles the physical state with the database and Collection Definition.
+Collection Definition is the authoritative source of configured collection structure.
 
-Example:
+The filesystem represents the current physical state.
 
-```text
-Universe = Genshin Impact
-Character = Furina
-Theme = Bikini
-```
-
-The Theme result does not create a second physical copy when a valid primary collection destination exists.
+AutoSort reconciles these three sources according to the rules of this document.
 
 ---
 
-# 6. Primary Collection Trees
+# 6. Physical Placement Priority
 
-A **primary collection tree** is a user-defined main organisational tree configured through Collection Definition.
-
-Examples may include:
+The current organisation model uses the following broad priority:
 
 ```text
-Anime
-Monster Girls
-Western Animation
+Configured Primary Collection Tree
+        ↓
+Configured subordinate classification levels
+        ↓
+Theme fallback
+        ↓
+remain in current valid workspace / Review
 ```
 
-These names are illustrative only. The system must not hard-code them.
+Primary Collection Trees are configured by the user. Examples may include Anime, Monster Girls and Western Animation, but the actual names are not hard-coded by AutoSort.
 
-The user may define other primary trees or rename them without changing the AutoSort architecture.
+Themes are a fallback organisation mechanism, not a peer of the primary trees.
 
-All configured primary collection trees have higher organisational priority than the Theme fallback.
+Where a reliable classification identifies a valid destination inside a primary tree, that destination has priority over Theme fallback.
 
-The general rule is:
-
-```text
-PRIMARY COLLECTION TREE(S)
-            ↓
-     THEMES FALLBACK
-```
-
-The exact selection between multiple primary trees is determined by Collection Definition and the applicable classification/placement rules.
+Universe and Character Analysis normally provide the semantic information used to determine where a file belongs inside a primary tree, but the exact hierarchy is defined by Collection Definition.
 
 ---
 
-# 7. Primary Tree Placement
+# 7. Primary Collection Placement
 
-AutoSort shall prefer a valid primary collection destination over Theme fallback when:
-
-* the relevant classification confidence/status satisfies its configured threshold;
-* a valid destination exists;
-* the destination is permitted by the access policy;
-* no protected user decision blocks the move;
-* no unresolved Review Queue decision requires user input.
+If a sufficiently reliable classification provides a destination inside a configured primary collection tree, AutoSort may propose or perform the move according to execution mode, access policy, thresholds and user-decision rules.
 
 A primary tree may use deeper classification levels such as Universe and Character where configured.
 
@@ -228,7 +225,7 @@ Universe classification may allow movement from Theme fallback into a primary tr
 
 Character classification may refine that destination when the configured assignment threshold is satisfied and an appropriate destination exists.
 
-Character uncertainty does not invalidate a valid primary/Universe placement.
+Character uncertainty does not invalidate a valid primary or Universe placement.
 
 ---
 
@@ -261,183 +258,171 @@ The universe or other classification does not need to exist in FINAL for the AI 
 
 AI workspace creation does not change Collection Definition and does not create a FINAL destination.
 
----
-
-# 12. FINAL Directory Rules
-
-AutoSort must not create arbitrary FINAL directories merely because a new classification is detected.
-
-A FINAL destination must already exist in Collection Definition unless the user explicitly changes the Collection Definition through the approved configuration workflow.
-
-A classification can therefore be valid even when no FINAL destination exists. It may be represented in AI/transition space or remain in a valid fallback location until the user defines a final destination.
+AI is disposable/reconstructable working space. Removing AI does not change the database, Collection Definition or FINAL organisation.
 
 ---
 
-# 13. Manual User Decisions
+# 12. Set Directory Handling
 
-Manual decisions have priority over automatic placement for the relevant protected context.
+Sets are physical collections of visually related files.
 
-This includes:
+An authorised workflow may create Set directories:
 
-* manual classification;
-* manual destination selection;
-* manual rejection;
-* manual correction;
-* manual return to another workspace.
-
-If the user explicitly selects a destination, that destination is considered valid for that decision context until the user changes the decision.
-
-AutoSort must not repeatedly undo such a correction merely because a later model prediction differs.
-
----
-
-# 14. Review Queue
-
-AutoSort may consume Review Queue decisions, but an unresolved review case must not be treated as automatic acceptance.
-
-Where user approval is required, AutoSort must wait for an applicable decision rather than performing the physical move prematurely.
-
-The relevant decision may result in:
+### Inside AI
 
 ```text
-ACCEPT
-REJECT
-MODIFY
-DEFER
+AI/Sets/0001/
+AI/Sets/0002/
 ```
 
+### Inside an already established primary tree
+
+```text
+Anime/Genshin Impact/Furina/0001/
+Anime/Genshin Impact/Furina/0002/
+```
+
+Set directory creation must not be confused with creation of a new primary semantic branch.
+
+AutoSort or the authorised Set workflow may create the Set-level directory only when its parent collection path is already established and permitted by Collection Definition.
+
+The Set's logical identity is stored in the database; a numeric folder name is only a physical representation.
+
+Set directories must not be used as evidence that their numeric names represent characters, universes or other semantic classifications.
+
 ---
 
-# 15. TODO Handling
+# 13. FINAL Directory Rules
 
-TODO is a processing source/workspace defined by Collection Definition.
+FINAL structure is controlled by Collection Definition and the user.
 
-Files may be processed repeatedly by independent modules.
+AutoSort must not automatically create arbitrary new FINAL primary collection branches because an analysis module produced a new classification.
 
-AutoSort uses currently available database information and must not invent missing classifications.
+A new FINAL destination becomes available only when the user/configuration explicitly establishes it in Collection Definition.
 
-A previous rejection does not permanently disable analysis unless the user explicitly establishes such protection.
+An AI workspace may therefore contain a universe or other classification that has no FINAL counterpart yet.
 
 ---
 
-# 16. Execution Modes
+# 14. Existing Destination Created Later
 
-### Preview Mode
+If a classification already exists in the database but no valid FINAL destination previously existed, the file may remain in Theme fallback, AI or another valid workspace.
 
-Calculates planned actions without moving files.
+When the user later creates the corresponding destination through Collection Definition, a later AutoSort execution may identify the affected files and move them to the newly valid destination.
 
-### Execute Mode
+No new analysis is required merely because the destination was created.
 
-Performs authorised filesystem operations.
+---
 
-### Audit Mode
+# 15. User Verification and Manual Decisions
 
-Checks for mismatches such as:
+AI placement represents proposed or working organisation unless and until the user establishes a final destination through the normal workflow.
 
-* database state versus filesystem location;
+The user may:
+
+* accept the proposed organisation;
+* reject it;
+* select another destination;
+* move a file or Set manually;
+* return it to another workspace.
+
+A manually selected destination is considered valid for that protected decision context.
+
+Later automatic processing must not repeatedly move the file away from that user-selected destination merely because the model produces another suggestion.
+
+The user may later change the decision explicitly.
+
+---
+
+# 16. TODO Handling
+
+TODO is an unclassified/processing workspace.
+
+Files in TODO may be analysed repeatedly by independent modules.
+
+AutoSort uses current database state and valid classification results when deciding whether a file is ready to leave TODO.
+
+A previous rejected automatic suggestion does not permanently disable future analysis, but the recorded user decision must be respected according to Review Queue/manual override rules.
+
+---
+
+# 17. Execution Modes
+
+## Preview Mode
+
+No files are moved.
+
+The module produces planned operations.
+
+## Execute Mode
+
+Authorised filesystem actions are performed.
+
+## Audit Mode
+
+The module checks for mismatches such as:
+
+* database location versus filesystem location;
 * missing files;
 * unexpected placement;
-* files remaining in Theme fallback despite an available primary destination.
+* files remaining in fallback locations despite a valid higher-priority primary destination;
+* Set directories inconsistent with their logical database parent.
 
 Audit mode does not automatically repair protected cases.
 
 ---
 
-# 17. Repeated Independent Execution
+# 18. Repeated Execution
 
-AutoSort is independently executable and may be run repeatedly in any order relative to analysis modules.
+AutoSort is independently executable and may be run repeatedly.
 
-Example:
+It should process only files whose current state requires an action.
 
-```text
-Day 1:  IRL Analysis
-Day 2:  Screenshot Analysis
-Day 3:  AutoSort
-Day 4:  Universe Analysis
-Day 5:  Theme Analysis
-Day 6:  AutoSort
-Day 7:  User creates a new primary destination
-Day 8:  AutoSort
-```
-
-No other module process needs to remain running.
-
-AutoSort reads the current database state at execution time.
-
----
-
-# 18. File Identity
-
-AutoSort follows DOC-012.
-
-SHA512 is the logical binary-content identity.
-
-A move or rename does not change SHA512.
-
-If the binary content changes and a new SHA512 is produced, AutoSort treats it as the new binary object according to the file identity rules.
-
----
-
-# 19. Access Policy
-
-All physical operations must obey the applicable Directory Access Policy and Collection Definition.
-
-For example:
-
-```text
-PROTECTED / READ_ONLY
-    → no physical move
-
-MODIFY
-    → permitted operations according to module rules
-```
-
-A FINAL tree is not assumed to be permanently immutable, but automatic corrections must follow the configured safety and user-decision workflow.
-
----
-
-# 20. Database / Filesystem Consistency
-
-A move is considered successful only when the filesystem operation succeeds and the resulting state can be safely recorded.
-
-If a move fails:
-
-* the failure is logged;
-* the database must not record the destination as successfully completed;
-* processing of other files may continue where safe.
-
----
-
-# 21. Logging
-
-Every proposed or performed operation shall be logged according to DOC-011.
-
-Useful information includes:
-
-```text
-execution_id
-SHA512
-source
-destination
-action
-reason
-result
-timestamp
-```
+A later execution may discover new information produced by analysis modules, newly configured destinations, or newly created valid parent paths for Set placement.
 
 Example:
 
 ```text
+Day 1: Theme = Bikini
+Day 4: Universe = Genshin Impact
+Day 5: User creates valid Anime/Genshin Impact/Furina/
+Day 6: AutoSort moves file from Theme fallback to primary tree
+Day 7: Set Detection creates/updates Set 0007 inside Furina
+```
+
+No module process needs to remain running between these executions.
+
+---
+
+# 19. Database and Filesystem Consistency
+
+A filesystem operation is considered complete only when the physical operation succeeds and the resulting state can safely be persisted to the database.
+
+If a move or directory operation fails:
+
+* the database must not report the operation as completed;
+* the failure must be logged;
+* unrelated independent work may continue where safe.
+
+---
+
+# 20. Logging
+
+Every performed or proposed operation shall be logged according to DOC-011.
+
+Example:
+
+```text
+SHA512: ...
 Action: MOVE
 Source: Themes/Bikini/image.jpg
 Destination: Anime/Genshin Impact/Furina/image.jpg
-Reason: higher-priority primary collection classification became available
-Result: SUCCESS
+Reason: valid higher-priority primary-tree classification became available
 ```
 
 ---
 
-# 22. No Direct Module-to-Module Communication
+# 21. No Direct Module-to-Module Communication
 
 AutoSort does not invoke analysis modules directly.
 
@@ -457,24 +442,21 @@ Persistent information shared between analysis modules is exchanged through the 
 
 ---
 
-# 23. Acceptance Criteria
+# 22. Acceptance Criteria
 
-AutoSort is compliant when it can:
+AutoSort is considered compliant when it can:
 
 * apply database-backed classifications to physical organisation;
 * maintain one canonical physical copy per binary file;
-* treat every configured primary collection tree as higher priority than Theme fallback;
-* use Theme when no appropriate primary destination is available;
-* promote files from Theme fallback when a valid primary destination becomes available;
-* support AI workspaces for classifications not yet represented in FINAL;
-* avoid automatic creation of arbitrary FINAL directories;
-* preserve manual user decisions;
-* work with Review Queue;
-* support Preview, Execute and Audit modes;
-* preserve SHA512 identity during moves and renames;
-* operate repeatedly and independently from analysis processes;
-* exchange persistent information through the shared database;
-* process large collections safely.
+* treat all configured primary collection trees as higher priority than Theme fallback;
+* use Theme as fallback when no sufficiently reliable primary destination exists;
+* move files from Theme fallback into a valid primary destination when one becomes available;
+* support AI workspaces for classifications that do not yet exist in FINAL;
+* support Set directories inside AI and inside already established primary-tree parent paths;
+* avoid automatic creation of arbitrary FINAL primary branches;
+* respect manual user decisions;
+* support repeated independent executions;
+* operate safely in Preview, Execute and Audit modes.
 
 ---
 
