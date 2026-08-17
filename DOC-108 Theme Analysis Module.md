@@ -8,25 +8,26 @@
 
 **Module:** Theme Analysis
 
-**Version:** 2.1
+**Version:** 2.2
 
 **Status:** Draft
+
+**Depends on:**
+
+DOC-005
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
+DOC-013
+DOC-302
 
 ---
 
 # 1. Purpose
 
 Theme Analysis detects broad visual themes present within an image.
-
-The module does not determine:
-
-* Universe
-* Character
-* Species
-
-Those responsibilities belong to dedicated modules.
-
-Theme Analysis focuses on general visual content and provides information that may be used as a **fallback organisation mechanism** when no sufficiently reliable higher-priority universe classification is available.
 
 Examples include:
 
@@ -40,9 +41,9 @@ School Uniform
 Kimono
 ```
 
-The module stores analysis results in the database.
+Theme Analysis is an information provider. It does not itself decide physical placement and does not move files.
 
-It does not itself move files or decide physical placement.
+Themes have a special architectural role: they are a **fallback organisational classification** used when an image cannot currently be placed into an appropriate higher-priority primary collection tree.
 
 ---
 
@@ -58,7 +59,7 @@ rather than:
 
 or:
 
-> Which fictional universe does the image belong to?
+> Which primary collection does the image belong to?
 
 Examples of valid themes:
 
@@ -96,6 +97,7 @@ Theme Analysis shall not:
 * move files;
 * rename files;
 * create FINAL directories;
+* determine primary collection placement;
 * identify a Universe as its primary responsibility;
 * identify Characters as its primary responsibility;
 * analyse Monster Girl species as its primary responsibility;
@@ -227,31 +229,47 @@ If the SHA512 changes, results belonging to the previous binary identity remain 
 
 ---
 
-# 9. Theme as Fallback Organisation
+# 9. Primary Collection Trees
 
-Theme is a **fallback**, not an equal-priority alternative to Universe.
+A **primary collection tree** is a user-defined collection root intended to be a main organisational destination for the collection.
 
-The intended classification hierarchy is broadly:
+Examples may include roots representing broad categories such as:
 
 ```text
-Universe
-   ↓
-Character, where sufficiently certain and applicable
-   ↓
-Theme fallback
+Anime
+Monster Girls
+Western Animation
 ```
 
-Theme-based physical organisation is appropriate when the system does not have a sufficiently reliable Universe classification that can provide a better destination.
+These examples are illustrative only. Their names, number and structure are defined by the user through Collection Definition and are not hard-coded by the system.
 
-For example:
+Primary collection trees have higher organisational priority than the Themes fallback.
+
+The general rule is:
+
+```text
+Primary Collection Tree(s)
+        ↓
+Themes fallback
+```
+
+Where multiple primary collection trees are configured, the system uses their configured classification/placement rules to determine the appropriate primary destination.
+
+---
+
+# 10. Theme as Fallback Organisation
+
+Theme-based physical organisation is appropriate when no applicable higher-priority primary collection destination is currently available.
+
+Example:
 
 ```text
 File
- ├── Universe: none / insufficient confidence
- └── Theme: Bikini 0.96
+ ├── no sufficiently reliable primary classification
+ └── Theme = Bikini 0.96
 ```
 
-The file may therefore be eligible for a configured Theme destination such as:
+The file may therefore be eligible for:
 
 ```text
 Themes/Bikini/
@@ -259,127 +277,70 @@ Themes/Bikini/
 
 provided that destination is valid according to Collection Definition and AutoSort rules.
 
+Theme is not an equal-priority alternative to a primary collection tree.
+
 ---
 
-# 10. Universe Supersedes Theme as Physical Organisation
+# 11. Promotion from Themes to a Primary Collection
 
-If a file is currently organised under a Theme fallback and later receives a sufficiently reliable Universe classification, the Universe classification takes precedence over Theme for physical organisation.
+If later analysis establishes a valid higher-priority primary classification, the file may be removed from its Theme fallback location and placed into the appropriate primary collection tree by the authorised processing workflow.
 
 Example:
 
 ```text
+Before:
 Themes/Bikini/image.jpg
-        ↓
-Universe Analysis
-        ↓
-Genshin Impact / Furina
+
+Later database state:
+Primary classification = Anime
+Universe = Genshin Impact
+Character = Furina
+
+After:
+Anime/Genshin Impact/Furina/image.jpg
 ```
 
-The database still retains the Theme result:
+The physical file is moved, not copied.
 
-```text
-Theme = Bikini
-```
+Theme Analysis results remain in the database after the move.
 
-but the physical file should no longer remain in the Theme fallback location when a valid higher-priority Universe destination is available.
+Theme Analysis itself never performs the move.
 
-An authorised processing module such as AutoSort may therefore **take the file out of the Theme tree and move it into the appropriate Universe tree**.
-
-This is not a new classification of the Theme result. It is a change in physical organisation because a higher-priority classification became available.
-
-The move must obey:
-
-* Collection Definition;
-* applicable Directory Access Policy;
-* confidence thresholds;
-* manual-decision protections;
-* Review Queue rules where user approval is required.
+The exact destination is determined by Collection Definition, AutoSort and user-decision rules.
 
 ---
 
-# 11. Theme Does Not Override Universe
+# 12. No Primary Destination Available
 
-Example:
+A file may have a valid Theme result while no usable primary collection destination exists.
 
-```text
-Universe: Genshin Impact 0.98
-Character: Furina 0.94
-Theme: Bikini 0.97
-```
-
-The physical organisation is determined by the higher-priority Universe/Character structure, not by `Themes/Bikini`.
-
-The Theme result remains stored as metadata and can still be used for search, filtering, statistics or later workflows.
-
----
-
-# 12. Unknown Universe / Future Universe Case
-
-Theme fallback is particularly useful when the system cannot currently identify a reliable Universe.
-
-Later, Universe Analysis may identify a Universe that was previously unknown or not yet represented in FINAL.
-
-In that case, the Universe result may enter an AI/transition workflow.
+This is a normal state, not an analysis failure.
 
 For example:
 
 ```text
-Themes/Bikini/image.jpg
-        ↓
-Universe Analysis
-        ↓
-Universe = New Franchise
-        ↓
-AI/New Franchise/
+Universe = Unknown
+Primary category = Unknown
+Theme = Bikini
 ```
 
-The AI workspace may be created when the relevant configured confidence/count threshold is met, even when the Universe does not yet exist in FINAL.
-
-When the user later approves the organisation, the content may be moved into the appropriate FINAL tree.
+The file may remain in a Theme fallback location until a better primary classification becomes available.
 
 ---
 
-# 13. Future Collection Expansion
-
-Theme Analysis does not itself change Collection Definition.
-
-If a user later creates a dedicated Universe destination in FINAL, existing database Universe results may allow AutoSort to identify files that were previously stored under Theme fallback and move them into the new Universe location during a later authorised execution.
-
-Example:
-
-```text
-Previously:
-Themes/Fairy/image.jpg
-
-Database:
-Universe = Winx Club
-```
-
-Later the user defines:
-
-```text
-FINAL/.../Winx Club/
-```
-
-AutoSort may then relocate the affected file, subject to the configured rules and user-decision protections.
-
-Theme Analysis itself performs no filesystem movement.
-
----
-
-# 14. Manual Decisions
+# 13. Manual Decisions
 
 Theme Analysis may provide information used by Review Queue.
 
-A user may reject or modify a Theme interpretation.
+A user may reject or modify a Theme interpretation or select a different physical destination.
 
 User decisions are stored separately from automatic analysis and must not be silently overwritten.
 
-A manual placement decision has priority over a later automatic placement suggestion for the relevant context until the user changes that decision.
+A manual placement decision has priority over later automatic placement suggestions for the relevant context until the user changes that decision.
 
 ---
 
-# 15. Performance and Resource Usage
+# 14. Performance and Resource Usage
 
 Theme Analysis should balance speed and accuracy.
 
@@ -396,9 +357,9 @@ The module should not require the entire collection in memory.
 
 ---
 
-# 16. Logging
+# 15. Logging
 
-Each execution shall create a Module Execution record and a summary log according to DOC-007 and DOC-011.
+Each execution shall create a Module Execution record and summary log according to DOC-007 and DOC-011.
 
 The summary should include where applicable:
 
@@ -407,7 +368,7 @@ started
 finished
 processed
 skipped
-new results
+new/updated results
 errors
 duration
 ```
@@ -416,7 +377,7 @@ Detailed errors should identify the affected file identity/path where safe.
 
 ---
 
-# 17. Interaction with Other Modules
+# 16. Interaction with Other Modules
 
 Theme Analysis communicates through the shared database.
 
@@ -427,16 +388,18 @@ Universe Analysis
         ↓
 Database
         ↓
-Theme-aware workflow / AutoSort
+AutoSort
 ```
+
+may use Universe and Theme results together when determining physical placement.
 
 Theme Analysis does not invoke Universe Analysis, Character Analysis or AutoSort directly.
 
-AutoSort is responsible for applying the hierarchy between Universe and Theme when deciding physical placement.
+AutoSort is responsible for applying the configured priority between primary collection trees and Theme fallback when deciding physical placement.
 
 ---
 
-# 18. FINAL and AI Handling
+# 17. FINAL and AI Handling
 
 Theme Analysis does not create FINAL directories.
 
@@ -444,11 +407,11 @@ FINAL destinations are defined by the user through Collection Definition.
 
 AI/transition workspaces may be dynamically extended by authorised processing workflows when configured thresholds are satisfied.
 
-A Theme result therefore may exist before a Universe result, and a Theme fallback location may later be superseded by a valid Universe location.
+A Theme result may therefore exist before a primary collection classification, and a Theme fallback location may later be superseded by a valid primary collection location.
 
 ---
 
-# 19. Future Extensions
+# 18. Future Extensions
 
 Possible future additions include:
 
@@ -458,13 +421,13 @@ Possible future additions include:
 * theme synonyms;
 * confidence calibration;
 * voting across multiple AI models;
-* improved interaction between Theme and Universe classification.
+* improved interaction between Theme and primary collection classification.
 
 Extensions should remain within this module while they remain logically part of Theme Analysis.
 
 ---
 
-# 20. Acceptance Criteria
+# 19. Acceptance Criteria
 
 Theme Analysis is considered compliant when it can:
 
@@ -474,11 +437,11 @@ Theme Analysis is considered compliant when it can:
 * associate results with the correct SHA512 identity;
 * operate independently of other module processes;
 * avoid direct module-to-module communication;
-* preserve Theme information when Universe classification supersedes it physically;
-* support Theme as a fallback when no sufficiently reliable Universe classification is available;
-* expose results to AutoSort through the shared database;
+* keep Themes subordinate to all configured primary collection trees;
+* support later promotion from Themes to an appropriate primary collection when authorised;
+* integrate with AutoSort and Review Queue through the database;
 * never create or modify FINAL directory structure as part of analysis;
-* support future expansion without unnecessary redesign.
+* operate efficiently on large collections.
 
 ---
 
