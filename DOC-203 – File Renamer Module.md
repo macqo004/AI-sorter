@@ -1,613 +1,473 @@
-DOC-203 – File Renamer Module
+# DOC-203
 
-1. Purpose
+# File Renamer Module
+
+**Project:** AI Image Collection Management System
+
+**Document:** DOC-203
+
+**Module:** File Renamer
+
+**Version:** 2.1
+
+**Status:** Draft
+
+**Depends on:**
+
+DOC-005
+DOC-007
+DOC-008
+DOC-010
+DOC-011
+DOC-012
+DOC-013
+DOC-203A
+
+---
+
+# 1. Purpose
 
 The File Renamer module provides a controlled and deterministic mechanism for modifying filenames within the project.
 
-Unlike ordinary batch renaming utilities, File Renamer is designed to operate safely on collections containing millions of images, including files stored inside the project's final collection trees.
+The module is intentionally conservative. It operates on filenames only and must never modify image contents, SHA512 identity or file identity.
 
-The module shall prioritize data safety over automation.
+The module may operate on files located in TODO, AI, primary collection trees, Themes or FINAL, provided that the selected scope and Directory Access Policy permit the requested modification.
 
-Whenever uncertainty exists, the module shall preserve the original filename rather than attempting to infer the user's intentions.
+---
 
-The File Renamer modifies only filenames.
+# 2. Responsibilities
 
-It shall never modify image contents.
+The File Renamer shall:
 
-2. Scope
+* rename files according to enabled filename rules;
+* process a user-selected scope recursively when configured;
+* detect filename conflicts before modification;
+* synchronize successful filesystem renames with the database;
+* preserve file identity;
+* generate Undo information;
+* create Review Queue entries for ambiguous or unsafe cases;
+* record execution history and results.
 
-The File Renamer is responsible for:
+The File Renamer shall not:
 
-renaming files;
-normalizing filenames;
-preparing filenames according to predefined rules;
-synchronizing filename changes with the project database;
-generating Undo information;
-generating Review Queue entries whenever required.
+* modify image contents;
+* calculate or change SHA512 as part of a rename operation;
+* change file identity;
+* create or modify collection classification;
+* move files between collection trees as part of filename renaming;
+* rename directories;
+* invoke other modules directly.
 
-The module shall never:
+---
 
-modify image contents;
-change directory structure;
-move files between collections;
-classify images;
-perform AutoSort operations.
+# 3. Identity and Database Rules
 
-These responsibilities belong to other project modules.
+The module follows DOC-012.
 
-3. Design Philosophy
+For a successful rename:
 
-The File Renamer follows the project's general design principle:
+```text
+SHA512   = unchanged
+file_id  = unchanged
+current_path = updated
+filename = updated
+```
 
-The system shall never guess when confidence is insufficient.
-
-The module shall only perform deterministic transformations explicitly defined by enabled triggers.
-
-If a filename cannot be safely transformed according to the selected trigger, the operation shall not be executed.
-
-Instead, a Review Queue entry may be created according to DOC-013.
-
-4. Architecture
-
-The File Renamer consists of two logical components.
-
-4.1 Renamer Engine
-
-The Renamer Engine is responsible for:
-
-directory traversal;
-trigger execution;
-conflict detection;
-database synchronization;
-Undo generation;
-logging;
-Review Queue integration;
-operation summary.
-
-The Renamer Engine does not define filename transformation rules.
-
-4.2 Rename Triggers
-
-Actual filename modifications are performed by independent triggers.
-
-Each trigger performs exactly one well-defined task.
-
-Examples include:
-
-Remove Duplicate Suffixes
-Replace Spaces
-Transliterate Characters
-WWW Filename Normalization
-Future filename rules
-
-The Renamer Engine executes enabled triggers.
-
-Triggers remain independent from one another.
-
-5. Trigger Philosophy
-
-Each trigger has exactly one responsibility.
-
-A trigger shall never perform unrelated filename modifications.
+A rename does not create a new file identity or invalidate analysis results.
 
 Example:
 
-The trigger:
-
-Remove Duplicate Suffixes
-
-may remove:
-
- (1)
-
- (25)
-
- [1]
-
- {3}
-
-It shall not:
-
-replace spaces;
-transliterate characters;
-convert filename case;
-remove arbitrary words.
-
-Those operations belong to separate triggers.
-
-This approach guarantees deterministic behaviour and simplifies future maintenance.
-
-6. Trigger Independence
-
-Triggers are completely independent.
-
-The user may execute:
-
-one trigger;
-multiple triggers;
-the same trigger multiple times.
-
-Example:
-
-Run:
-
-Remove Duplicate Suffixes
-
-Later:
-
-Run:
-
-Replace Spaces
-
-Later again:
-
-Run:
-
-Remove Duplicate Suffixes
-
-The File Renamer shall not assume that previous triggers have already been executed.
-
-Every trigger shall analyse the current filename only.
-
-7. Trigger Execution
-
-When multiple triggers are selected, they shall be executed sequentially.
-
-Each trigger receives the filename produced by the previous trigger.
-
-Example:
-
-Original:
-
-Фурина (1).jpg
-
-Trigger:
-
-Remove Duplicate Suffixes
-
-↓
-
-Фурина.jpg
-
-Trigger:
-
-Transliteration
-
-↓
-
-Furina.jpg
-
-Each trigger performs only its own transformation.
-
-8. Trigger Configuration
-
-Each trigger may be enabled or disabled independently.
-
-Example:
-
-☑ Remove Duplicate Suffixes
-
-☑ Replace Spaces
-
-☐ Transliterate Characters
-
-☐ Convert To Lowercase
-
-Only enabled triggers participate in the current execution.
-
-The File Renamer itself shall not permanently enable or disable triggers.
-
-Trigger configuration belongs to project settings.
-
-9. Working Scope
-
-The user selects a starting directory.
-
-The module processes:
-
-the selected directory;
-all subdirectories below it.
-
-Example:
-
-Selected:
-
-Collection/Anime
-
-Processed:
-
-Collection/Anime/Genshin
-
-Collection/Anime/Furina
-
-Collection/Anime/Blue Archive
-
-Not processed:
-
-Collection/Monster Girls
-
-Collection/Themes
-10. Supported Objects
-
-The File Renamer operates only on files.
-
-Directory names shall not be modified.
-
-Future support for directory renaming may be introduced as a separate module.
-
-11. Rule Engine
-
-Triggers shall use configurable Rule Sets.
-
-The Rule Engine determines which filename patterns are recognised.
-
-Examples include:
-
-Windows duplicate suffixes;
-browser duplicate suffixes;
-application-generated suffixes;
-user-defined suffixes.
-
-The Rule Engine shall be configurable.
-
-Hardcoded filename rules should be avoided whenever practical.
-
-Rule Set specification is defined separately from this document.
-
-12. Safe Transformation Principle
-
-Triggers shall only perform transformations explicitly defined by their Rule Sets.
-
-Example:
-
-Allowed:
-
-furina (1).jpg
-
-↓
-
-furina.jpg
-
-Not allowed:
-
-furina_drawn_by_artist.jpg
-
-↓
-
-furina.jpg
-
-because no rule explicitly defines such transformation.
-
-13. Ambiguous Cases
-
-If a trigger cannot determine whether a filename fragment matches one of its rules with sufficient certainty, the filename shall remain unchanged.
-
-The trigger may create a Review Queue entry according to DOC-013.
-
-The module shall always prefer preserving filenames over risking incorrect modifications.
-
-14. Dry Run Mode
-
-Every trigger shall support Dry Run mode.
-
-During Dry Run:
-
-filenames are analysed;
-proposed changes are generated;
-conflicts are detected;
-Review Queue entries are generated;
-database remains unchanged;
-files remain unchanged.
-
-Example:
-
-Current:
-
-furina (1).jpg
-
-Proposed:
-
-furina.jpg
-
-Dry Run allows the user to verify the entire operation before making any changes.
-
-15. Trigger Result
-
-After execution each trigger shall produce a summary.
-
-Minimum information:
-
-processed files;
-renamed files;
-skipped files;
-conflicts;
-Review Queue entries;
-errors.
-
-Example:
-
-Trigger
-
-Remove Duplicate Suffixes
-
-Processed:
-124523
-
-Renamed:
-119842
-
-Skipped:
-4652
-
-Review Queue:
-18
-
-Errors:
-11
-
-The Renamer Engine combines individual trigger reports into the final operation summary.
-
-16. Filename Conflict Detection
-
-Before renaming a file, the Renamer Engine shall verify whether the target filename already exists within the destination directory.
-
-Example:
-
-Current directory:
-
-furina.jpg
-
-furina (1).jpg
-
-Removing the duplicate suffix would result in:
-
-furina.jpg
-
-Since the filename already exists, the rename operation shall not be executed automatically.
-
-The original filename shall remain unchanged.
-
-17. Conflict Handling
-
-When a filename conflict is detected:
-
-the affected file shall not be renamed;
-remaining files shall continue processing;
-a Review Queue entry may be created;
-the conflict shall be included in the operation summary.
-
-The Renamer shall never stop processing the remaining files because of individual conflicts.
-
-18. Review Queue Integration
-
-Whenever a trigger cannot safely complete an operation, it may create a Review Queue entry according to DOC-013.
-
-Typical situations include:
-
-filename conflicts;
-ambiguous rule matches;
-unsupported filename patterns;
-filesystem errors requiring manual verification.
-
-The Review Queue shall contain:
-
-module name;
-trigger name;
-current filename;
-proposed filename (if available);
-reason for review;
-confidence level (if applicable).
-
-The File Renamer shall never execute operations stored only as suggestions.
-
-19. Undo Support
-
-The File Renamer shall generate Undo information for every successful rename operation.
-
-Undo information shall allow the original filename to be restored.
-
-Each Undo record should contain at minimum:
-
-Timestamp
-
-Trigger
-
-file_id
-
-SHA512
-
-Original filename
-
-New filename
-
-Original path
-
-New path
-
-Undo information shall be stored independently from ordinary log files.
-
-The exact storage format is implementation-dependent.
-
-20. Database Synchronization
-
-The File Renamer modifies only filenames.
-
-Image identity remains unchanged.
-
-After every successful rename:
-
-current_path shall be updated;
-file_id shall remain unchanged;
-SHA512 shall remain unchanged;
-analysis results shall remain unchanged.
-
-The database shall only be updated after the filesystem operation has completed successfully.
-
-Recommended order:
-
-Prepare rename.
-Validate conflicts.
-Rename file.
-Verify success.
-Update current_path.
-Write log.
-Store Undo information.
-
-The database shall never be updated before a successful filesystem operation.
-
-21. Relationship with File Identity
-
-The File Renamer shall comply with DOC-012.
-
-Renaming a file shall never create a new database record.
-
-Example:
-
+```text
 Before:
-
 file_id = 152
-
 SHA512 = AAAAA
-
 current_path = AI/Furina (1).jpg
 
 After:
-
 file_id = 152
-
 SHA512 = AAAAA
-
 current_path = AI/Furina.jpg
+```
 
-Only current_path changes.
+The database must be updated only after the filesystem operation has succeeded and been verified.
 
-22. Logging
+---
 
-Every rename operation shall be logged according to DOC-011.
+# 4. Architecture
 
-The log should contain:
+The module consists of two logical layers:
 
-trigger name;
-processed file;
-result;
-execution time;
-errors;
-generated Review Queue entries.
+```text
+Renamer Engine
+      ↓
+Filename Rules
+```
 
-The operational log shall not replace Undo information.
+The **Renamer Engine** manages scope, execution, conflict detection, filesystem changes, database synchronization, logging, Undo and Review Queue integration.
 
-23. Error Handling
+**DOC-203A** defines the configurable filename rules and their behaviour.
 
-The Renamer Engine shall continue processing whenever possible.
+The engine must not contain hard-coded knowledge of every filename pattern.
 
-Errors affecting one file shall not interrupt processing of remaining files.
+---
 
-Examples include:
+# 5. Rule Independence
 
-permission denied;
-filename already exists;
-file locked by another process;
-filesystem errors;
-database update failure.
+Rules are independently configurable.
 
-Each error shall be logged.
+A user may execute:
 
-Critical failures may terminate the current trigger only if continuing could compromise data integrity.
+```text
+Remove Duplicate Suffixes
+```
 
-24. Safety Principles
+then later:
+
+```text
+Replace Spaces
+```
+
+and later again:
+
+```text
+Remove Duplicate Suffixes
+```
+
+Each execution evaluates the current filename.
+
+The engine must not assume that another rule was previously executed.
+
+When several rules are selected in one execution, their configured execution order is respected. The output of one rule becomes the input of the next rule.
+
+---
+
+# 6. Working Scope
+
+The user explicitly selects the starting root and processing options.
+
+The module may process recursively according to the configured scope and Collection Definition/traversal rules where applicable.
+
+Directory names are never changed by this module.
+
+The module must respect Directory Access Policy:
+
+```text
+PROTECTED / READ_ONLY
+    → no filesystem rename
+
+MODIFY
+    → rename permitted where the module's rules allow it
+```
+
+The module shall not assume that a physical tree named `TODO`, `AI` or `FINAL` has a universal meaning outside Collection Definition.
+
+---
+
+# 7. Safe Transformation Principle
+
+A rename is performed only when the selected rule deterministically matches the filename and defines the transformation.
+
+Example:
+
+```text
+furina (1).jpg
+        ↓
+furina.jpg
+```
+
+may be valid for an enabled duplicate-suffix rule.
+
+The module must not infer that:
+
+```text
+furina_drawn_by_artist (1).jpg
+```
+
+should become:
+
+```text
+furina.jpg
+```
+
+unless an explicit rule defines that transformation.
+
+When uncertain, the original filename is preserved.
+
+---
+
+# 8. Filename Conflict Handling
+
+Before every physical rename, the module shall verify that the target filename does not already exist in the same destination directory.
+
+Example:
+
+```text
+furina.jpg
+furina (1).jpg
+```
+
+If removing `(1)` would produce an existing filename, the rename shall not be performed automatically.
+
+The affected file remains unchanged.
+
+A Review Queue entry may be generated according to DOC-013.
+
+The conflict must not stop processing of unrelated files.
+
+The module must never use destructive overwrite or arbitrary operating-system suffixes such as `(1)` to resolve a conflict.
+
+---
+
+# 9. Review Queue Integration
+
+Review Queue shall be used when the module cannot safely determine the intended transformation.
+
+Typical cases include:
+
+* ambiguous suffixes;
+* filename conflicts;
+* unsupported patterns;
+* permission or filesystem situations requiring user intervention.
+
+A review item may contain:
+
+```text
+module
+rule
+file_id
+SHA512
+current path
+current filename
+proposed filename
+reason
+confidence where applicable
+```
+
+A Review Queue suggestion is not an authorization to rename the file.
+
+The user decision remains authoritative for the protected context.
+
+---
+
+# 10. Dry Run
+
+The module shall support Dry Run.
+
+During Dry Run:
+
+* files are analysed;
+* proposed filenames are generated;
+* conflicts are detected;
+* Review Queue entries may be generated;
+* database current-path state is not changed;
+* files are not renamed.
+
+Example:
+
+```text
+Current:
+furina (1).jpg
+
+Proposed:
+furina.jpg
+```
+
+---
+
+# 11. Execution
+
+The recommended physical operation order is:
+
+```text
+1. Read current file state
+2. Evaluate rule
+3. Validate target name
+4. Check access policy
+5. Check conflict
+6. Perform filesystem rename
+7. Verify result
+8. Update current_path / filename in database
+9. Store Undo information
+10. Write event/log information
+```
+
+The database must not report the rename as successful before the filesystem operation has succeeded.
+
+---
+
+# 12. Undo Information
+
+Every successful rename should generate persistent Undo information independent from ordinary logs.
+
+At minimum it should contain:
+
+```text
+execution_id
+rule
+file_id
+SHA512
+original path
+original filename
+new path
+new filename
+timestamp
+```
+
+Undo shall restore the previous filename without changing the file's SHA512 identity.
+
+The exact storage implementation is defined by the database implementation.
+
+---
+
+# 13. Logging
+
+Each execution shall create a Module Execution record according to DOC-007 and logs according to DOC-011.
+
+The execution summary should include:
+
+```text
+starting scope
+rules executed
+processed
+renamed
+skipped
+conflicts
+Review Queue items
+errors
+Undo records
+duration
+```
+
+Individual rename events should identify the file SHA512 where available.
+
+---
+
+# 14. Error Handling
+
+Errors affecting one file shall not stop unrelated processing where safe.
+
+Typical errors include:
+
+```text
+permission denied
+file locked
+filename conflict
+filesystem failure
+database synchronization failure
+unsupported filename
+```
+
+A database synchronization failure after a filesystem rename is a critical consistency condition and shall be logged and handled according to the module's recovery procedure. The system must not silently pretend that the rename did not happen.
+
+---
+
+# 15. Execution Independence
+
+File Renamer is an independently executable module.
+
+It does not require another analysis module to be running.
+
+The module may be executed repeatedly and in any order relative to other project modules.
+
+For example:
+
+```text
+Day 1: Renamer
+Day 2: IRL Analysis
+Day 3: Renamer
+Day 4: Universe Analysis
+Day 5: Renamer
+```
+
+Each execution uses the current filesystem and database state.
+
+---
+
+# 16. Performance
+
+The collection may contain millions of files.
+
+The implementation should therefore:
+
+* process files incrementally;
+* avoid loading the entire collection into memory;
+* use configurable batching where beneficial;
+* use parallel workers only where deterministic behaviour and filesystem safety can be preserved;
+* avoid modifying the same file concurrently;
+* preserve database consistency.
+
+Performance optimisation must not compromise deterministic transformations or safety.
+
+---
+
+# 17. User Control
+
+The user controls at minimum:
+
+* starting scope;
+* recursive processing;
+* enabled rules;
+* rule ordering;
+* Dry Run / Execute mode;
+* execution start.
+
+The File Renamer shall never start itself as a consequence of another module execution.
+
+---
+
+# 18. Integration with Other Modules
+
+The File Renamer does not invoke other modules.
+
+Its information flow is:
+
+```text
+Filesystem + Database
+        ↓
+File Renamer
+        ↓
+Filesystem + Database
+```
+
+Other modules may observe the updated filename/path state through the shared database.
+
+The Renamer must not modify analysis results owned by other modules.
+
+---
+
+# 19. Safety Principles
 
 The File Renamer shall follow these principles:
 
-never guess filename semantics;
-never remove information not explicitly matched by a rule;
-never overwrite existing files;
-never silently resolve filename conflicts;
-never modify image contents;
-never modify directory names;
-never modify SHA512;
-never modify file_id.
+* never guess filename meaning;
+* never remove information without an explicit matching rule;
+* never overwrite an existing file;
+* never silently resolve conflicts;
+* never modify image contents;
+* never modify SHA512;
+* never create a new file identity because of a rename;
+* never modify directory names;
+* preserve the original filename whenever uncertainty exists.
 
-Whenever uncertainty exists, the filename shall remain unchanged.
+---
 
-25. Performance
+# 20. Acceptance Criteria
 
-The File Renamer shall process files sequentially within the selected scope.
+The module is considered compliant when it can:
 
-The implementation may use multiple worker threads provided that:
+* perform deterministic filename transformations;
+* use independently configurable rules defined by DOC-203A;
+* process user-selected scopes safely;
+* respect Directory Access Policy;
+* preserve SHA512 and file identity;
+* update database path state only after successful filesystem changes;
+* detect and safely handle filename conflicts;
+* support Dry Run;
+* integrate with Review Queue;
+* provide persistent Undo information;
+* continue after recoverable per-file failures;
+* execute independently and repeatedly on large collections.
 
-two workers never attempt to rename the same file simultaneously;
-database consistency is preserved;
-Undo information remains ordered correctly.
+---
 
-Performance optimizations shall never compromise deterministic behaviour.
-
-26. User Interaction
-
-The user controls:
-
-starting directory;
-enabled triggers;
-recursive processing;
-Dry Run mode;
-execution.
-
-The File Renamer shall never execute automatically.
-
-Every execution is initiated explicitly by the user.
-
-27. Operation Summary
-
-After completion, the Renamer Engine shall generate a global summary.
-
-Recommended information:
-
-Execution Summary
-
-Starting directory
-
-Execution time
-
-Processed files
-
-Renamed files
-
-Skipped files
-
-Conflicts
-
-Review Queue entries
-
-Errors
-
-Database updates
-
-Undo records created
-
-This summary provides the user with an overview of the completed operation.
-
-28. Future Extensions
-
-The architecture is designed to support additional triggers without modifying the Renamer Engine.
-
-Future triggers may include:
-
-filename case normalization;
-removal of unsupported filesystem characters;
-custom user-defined rules;
-filename templates;
-regular-expression-based transformations;
-plugin-provided filename transformations.
-
-Each future trigger shall comply with the principles defined in this document.
-
-29. Final Design Principle
-
-The File Renamer is intentionally conservative.
-
-Its purpose is not to "clean" filenames aggressively.
-
-Its purpose is to execute deterministic, explicitly requested transformations while preserving the integrity of the collection.
-
-Whenever there is doubt, the system shall preserve the original filename and defer the decision to the user through the Review Queue.
-
-This principle takes precedence over automation and shall remain the guiding rule for all future development of the File Renamer module.
+# End of DOC-203
