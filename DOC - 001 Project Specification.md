@@ -4,7 +4,7 @@
 
 **Project:** AI Image Collection Management System
 
-**Document:** DOC-001
+**Document:** DOC - 001
 
 **Version:** 2.0
 
@@ -558,17 +558,17 @@ Stability, traceability and user control are more important than achieving maxim
 The following documents define detailed aspects of the architecture:
 
 ```text
-DOC-000    Documentation Standards
-DOC-002    Database Architecture Specification
-DOC-003    System Architecture
-DOC-007    Module Execution Engine
-DOC-008    Configuration Manager
-DOC-010    Module Interface Specification
-DOC-011    Logging Standard
-DOC-012    File Identity Model / Specification
-DOC-013    Review Queue Specification
-DOC-301    Collection Definition Wizard
-DOC-302    Collection Definition Format
+DOC - 000    Documentation Standards
+DOC - 002    Database Architecture Specification
+DOC - 003    System Architecture
+DOC - 007    Module Execution Engine
+DOC - 008    Configuration Manager
+DOC - 010    Module Interface Specification
+DOC - 011    Logging Standard
+DOC - 012    File Identity Model / Specification
+DOC - 013    Review Queue Specification
+DOC - 301    Collection Definition Wizard
+DOC - 302    Collection Definition Format
 ```
 
 The exact responsibility of each document is defined by the current documentation set.
@@ -594,4 +594,4 @@ This project specification is considered complete when:
 
 ---
 
-# End of DOC-001
+# End of DOC - 001
