@@ -1,12 +1,11 @@
-# DOC-005
-# Database Schema
+# DOC-005 – Database Schema
 
 **Project:** AI Image Collection Management System  
 **Document:** DOC-005  
-**Version:** 2.1  
-**Status:** Draft
+**Version:** 3.0  
+**Status:** Design Specification
 
-**Depends on:** DOC-001, DOC-002, DOC-003, DOC-010, DOC-012, DOC-013
+**Depends on:** DOC-001, DOC-002, DOC-003, DOC-008, DOC-009, DOC-010, DOC-012, DOC-013, DOC-014, DOC-301, DOC-302
 
 ---
 
@@ -16,161 +15,297 @@ This document defines the logical database schema of the project.
 
 The database is the shared persistence and communication layer between modules. Modules do not communicate directly with one another; persistent information exchanged between modules is exchanged through the database.
 
-This document defines the logical data model. SQL implementation details, indexes, migrations and database-engine-specific optimizations are implementation concerns unless explicitly required by the logical model.
+DOC-005 defines the logical entities, relationships, ownership rules and state represented by the database. SQL syntax, indexes, migrations and database-engine-specific optimisations are implementation concerns unless explicitly required by this logical model.
+
+The database is expected to support collections of approximately 5,000,000 files and substantially larger collections without requiring the entire dataset to be held in memory.
 
 ---
 
-# 2. File Identity
+# 2. Fundamental Identity Model
 
-File identity is defined by **DOC-012 – File Identity Model**.
-
-The primary logical identifier of a binary file is its **SHA512**.
-
-SHA512 is the binary-content key of the file record and is expected to be unique.
-
-A technical `file_id` may also exist as an internal database identifier for relationships and implementation purposes. It does not replace SHA512 as the logical identity of the file.
+The project distinguishes between **binary-content identity** and **physical file location**.
 
 ```text
 SHA512
-    ↓
-logical binary-file identity
+  = identity of a binary file content
 
-file_id
-    ↓
-internal database identifier
-```
-
-Filename, extension and path do not define identity.
-
-Renaming or moving a file does not change its SHA512 identity.
-
-If binary content changes and a different SHA512 is produced, the database must represent the new binary object as a new identity. The previous SHA512 record may become `ARCHIVED` according to DOC-012 and Database Maintenance rules.
-
-The project does not design a normal workflow around SHA512 collisions. A collision is an integrity problem, not an ordinary lifecycle event.
-
-The system must never invent a placeholder SHA512 when calculation fails.
-
----
-
-# 3. Core Entities
-
-```text
 File
-  ├── Analysis Result
-  ├── Classification Result
-  ├── File Event
-  ├── Tag Assignment
-  └── Review Item
+  = logical record identified by SHA512
 
-Module
-  └── Module Execution
-
-Collection
-  └── Collection Root
+File Location / Instance
+  = one physical filesystem occurrence of that content
 ```
 
-Not every entity is required for every file.
+This distinction is required because two or more physical files may contain exactly the same binary content and therefore share the same SHA512 while existing at different paths.
+
+`SHA512` is the logical identity of the binary content and the unique content key of the `File` entity.
+
+A technical `file_id` may exist as an internal surrogate identifier. It must not replace SHA512 as the project's logical file identity.
+
+Filename, extension, path and physical location do not define binary identity.
 
 ---
 
-# 4. File
+# 3. File and File Location
 
-The File entity represents one binary file known to the framework.
+## 3.1 File
+
+`File` represents one unique binary content identity.
 
 Core logical fields:
 
 | Field | Meaning |
 |---|---|
-| `sha512` | Logical identity of the binary content; unique |
-| `file_id` | Internal technical identifier |
-| `current_path` | Current physical path |
+| `sha512` | Logical identity of binary content; unique |
+| `file_id` | Optional technical surrogate identifier |
+| `first_seen` | First time this content identity entered the database |
+| `last_seen` | Latest successful observation of at least one physical instance |
+| `status` | Lifecycle state of the logical content record |
+
+Typical logical states:
+
+```text
+ACTIVE
+ARCHIVED
+```
+
+A `File` record is not tied to one physical path.
+
+## 3.2 File Location / Instance
+
+`FileLocation` represents one physical occurrence of a `File` on a filesystem.
+
+Core logical fields:
+
+| Field | Meaning |
+|---|---|
+| `location_id` | Unique technical identifier of this physical occurrence |
+| `file_id` / `sha512` reference | Associated binary-content identity |
+| `current_path` | Current full physical path |
 | `filename` | Current filename |
 | `extension` | Current extension |
-| `size_bytes` | Current file size |
-| `modified_time` | Filesystem modification timestamp |
-| `width` | Image width where available |
-| `height` | Image height where available |
-| `first_seen` | Record creation timestamp |
+| `size_bytes` | Current filesystem size |
+| `modified_time` | Current filesystem modification timestamp |
+| `first_seen` | First observation of this physical occurrence |
 | `last_seen` | Latest successful filesystem verification |
-| `status` | Current lifecycle state |
+| `state` | Current physical-instance state |
+| `root_id` | Configured Collection Definition root, where applicable |
 
-Typical lifecycle states are:
+Typical location states:
 
 ```text
 ACTIVE
 MISSING
 ARCHIVED
-DELETED
 ```
 
-`file_id` may be implemented as a database primary key for technical convenience, but this does not alter the SHA512 identity model.
+A physical move or rename changes the location record, not the `File` identity.
 
 ---
 
-# 5. Analysis Result
+# 4. Why the Two-Level Model Is Required
 
-Stores observations produced by analysis modules.
+Consider:
+
+```text
+D:\Anime\Genshin\Furina\0001\image.jpg
+E:\Backup\image.jpg
+```
+
+If both files have:
+
+```text
+SHA512 = ABC...
+```
+
+they represent the same binary content but two physical occurrences.
+
+The database therefore stores:
+
+```text
+File
+  SHA512 = ABC...
+
+FileLocation #1
+  path = D:\Anime\...
+
+FileLocation #2
+  path = E:\Backup\...
+```
+
+This allows Duplicate Management to identify multiple physical copies without violating the rule that SHA512 identifies the content.
+
+Duplicate Management decides how such occurrences are related and which one may be treated as the preferred/master occurrence. It does not redefine file identity.
+
+---
+
+# 5. File Identity Changes
+
+A physical move or rename does not change SHA512.
+
+A binary-content modification that produces a different SHA512 represents a different content identity.
+
+Example:
+
+```text
+Before:
+SHA512 = AAA
+
+file contents modified
+
+After:
+SHA512 = BBB
+```
+
+The database must not silently change the identity of the existing `File(AAA)` record into `BBB`.
+
+The old content may become `ARCHIVED` when no active physical instances remain. The new content receives its own `File(BBB)` identity.
+
+A SHA512 calculation failure must never result in a fabricated placeholder identity.
+
+The project does not design an ordinary workflow around SHA512 collisions. A collision is an integrity event and must be handled explicitly.
+
+---
+
+# 6. Scanner-Owned File Registration
+
+Scanner is responsible for discovering physical files and establishing/updating their database representation.
+
+A typical flow is:
+
+```text
+filesystem
+    ↓
+Scanner
+    ↓
+SHA512 calculation
+    ↓
+File identity lookup/create
+    ↓
+FileLocation lookup/create/update
+```
+
+A newly discovered physical file must exist in the database before other modules can reliably process it.
+
+Scanner processing is incremental. Successful records shall not be rolled back merely because an unrelated file fails later in the same execution.
+
+---
+
+# 7. Analysis Result Model
+
+Analysis modules write their own results into the database.
+
+The database must support independent result sets rather than requiring one global pipeline state.
+
+Examples include:
+
+```text
+BW / Color
+Screenshot
+Reaction
+IRL
+Cosplay
+```
+
+A result belongs to:
+
+```text
+File
+  + producing Module
+  + result category / feature
+```
+
+The logical schema may use dedicated tables or a shared result structure where appropriate; the mandatory semantic rule is that each module owns the results it produces.
+
+A module must not overwrite another module's result set merely because both analyse the same file.
+
+---
+
+# 8. Analysis Result State
+
+The project does not require a separate database row merely to represent `NOT_PROCESSED` for every file/module combination.
+
+In the normal model:
+
+```text
+result exists
+    = processed result is available
+
+result absent
+    = module has no current result for that file
+```
+
+A module may define additional explicit states where needed, for example:
+
+```text
+FAILED
+SKIPPED
+NOT_APPLICABLE
+```
+
+These states belong to the module's own result specification and must not be confused with the lifecycle of the `File` itself.
+
+---
+
+# 9. Module Result Lifecycle and Cleanup
+
+The project follows DOC-014.
+
+The database does **not** require each stored analysis result to contain a model-generation identifier merely to support reprocessing.
+
+When a module changes substantially and the user wants to recalculate its results:
+
+```text
+user selects module
+        ↓
+Module Result Cleanup
+        ↓
+results belonging to that module are cleared
+        ↓
+module runs again
+```
+
+Cleanup is scoped to the selected module/result category and must not remove unrelated results, file identities or physical file records.
+
+Changing a model, algorithm or module implementation does not automatically launch a global reprocessing operation.
+
+The database may retain module execution history, but ordinary result storage does not need multiple generations of the same result solely for version tracking.
+
+---
+
+# 10. Classification Result Model
+
+Semantic classification results are distinct from low-level analysis observations.
 
 Examples:
 
 ```text
-BW
-SCREENSHOT
-IRL
-COSPLAY
-REACTION
-```
-
-An analysis result belongs to a file and to the module that produced it.
-
-Core fields:
-
-```text
-analysis_id
-file_id
-module_id
-feature
-value
-confidence
-module_version
-created_at
-superseded_at
-```
-
-A module owns the results it produces and must not silently overwrite another module's results.
-
----
-
-# 6. Classification Result
-
-Stores semantic interpretations such as:
-
-```text
+PRIMARY TREE CLASS
 UNIVERSE
 CHARACTER
+SPECIES
 THEME
-SET
 ```
 
-Each result records its source, for example:
+`SET` is a special case: Set is both classification/organisation information and a physical directory concept. The exact Set relationship is defined by DOC-109.
+
+A classification record shall distinguish its source:
 
 ```text
-AI
+AUTOMATIC
 USER
 IMPORTED
 ```
 
-Automatic and manual results must be distinguishable.
+It should also identify the producing module where applicable.
 
-A manual user decision has priority over an automatic result for the same classification context unless the user explicitly changes or removes that decision.
-
-Core fields include:
+Core logical fields may include:
 
 ```text
 classification_id
 file_id
 classification_type
-value
+value / target_id
 confidence
 source
 module_id
@@ -178,15 +313,84 @@ created_at
 is_current
 ```
 
-Historical classification results may be retained.
+Historical results may be retained where useful.
 
 ---
 
-# 7. Module
+# 11. Manual Decisions and Protected Results
 
-Identifies an executable project component.
+User decisions are first-class project information.
 
-Core fields:
+A user may manually correct a proposed classification or placement through Review Queue.
+
+The database must preserve enough information to distinguish:
+
+```text
+automatic observation
+user decision
+current accepted result
+```
+
+A protected manual decision has priority over later automatic results for the same classification or placement context until the user explicitly changes or removes that decision.
+
+Cleaning an unrelated module's result set must not delete a protected manual decision.
+
+The detailed workflow is defined by DOC-013.
+
+---
+
+# 12. Review Queue
+
+Review Queue is defined by DOC-013 and is the common user-decision mechanism.
+
+A persistent review record may reference:
+
+```text
+review_id
+file_id
+SHA512
+location_id, where relevant
+module_id
+execution_id
+reason
+suggested_result
+suggested_destination
+confidence
+status
+created_at
+resolved_at
+```
+
+There is no separate Migration Queue requirement.
+
+A move or placement correction is one possible outcome of a Review Queue decision.
+
+A review record must remain tied to the relevant file identity and must be revalidated before applying a physical operation.
+
+---
+
+# 13. User Decision Model
+
+The persistent Review Queue case supports the logical user decisions defined by DOC-013:
+
+```text
+ACCEPT
+REJECT
+MODIFY
+DEFER
+```
+
+The database must preserve the resulting decision and, where applicable, the final user-selected destination or classification.
+
+The physical filesystem operation is performed by the authorised execution mechanism, not by the database itself.
+
+---
+
+# 14. Module Entity
+
+`Module` identifies an executable project component.
+
+Core logical fields:
 
 ```text
 module_id
@@ -196,15 +400,15 @@ enabled
 description
 ```
 
-Module execution is user-initiated unless a future specification explicitly introduces another mechanism.
+The stored module version is useful for execution history, diagnostics and identifying the installed implementation. It is **not** a requirement to version every result row by model generation.
 
 ---
 
-# 8. Module Execution
+# 15. Module Execution
 
-Records one execution instance of a module.
+`ModuleExecution` records one invocation of a module.
 
-Core fields:
+Core logical fields:
 
 ```text
 execution_id
@@ -212,13 +416,14 @@ module_id
 started_at
 finished_at
 status
+files_examined
 files_processed
 files_skipped
 files_failed
 notes
 ```
 
-Typical states:
+Typical execution states:
 
 ```text
 STARTING
@@ -228,280 +433,369 @@ CANCELLED
 FAILED
 ```
 
-Execution history is independent from file identity and file history.
+Module executions are independent.
+
+An IRL execution does not require a Screenshot execution in the same run, and vice versa.
+
+Execution history does not define module dependency order.
 
 ---
 
-# 9. File Event
+# 16. File Events and History
 
-Records important historical actions affecting a file.
+Important historical actions should be represented by immutable events or equivalent history records.
 
 Examples:
 
 ```text
 SCANNED
-MOVED
+DISCOVERED_LOCATION
+LOCATION_CHANGED
 RENAMED
+MOVED
 ANALYSIS_COMPLETED
 CLASSIFICATION_CREATED
 USER_CORRECTED
 MOVED_TO_AI
 MOVED_TO_FINAL
-DELETED
 ARCHIVED
+DELETED
 ```
 
-Core fields:
+Core logical fields may include:
 
 ```text
 event_id
 file_id
-module_id
+location_id, where relevant
+module_id, where relevant
 event_type
 timestamp
 description
 related_execution_id
 ```
 
-Events are historical records and should not be rewritten to represent another past event.
+Events describe what happened; they should not be rewritten to make a historical operation appear to be something else.
 
 ---
 
-# 10. Tags
+# 17. Duplicate Groups and Master Selection
 
-Tags provide semantic information independent of the physical folder tree.
+Duplicate Management is defined by DOC-204.
 
-Tag membership is many-to-many:
+The schema must allow the database to represent multiple physical `FileLocation` records associated with one `File`/SHA512.
+
+A duplicate-management layer may store, for example:
 
 ```text
-File → FileTag → Tag
+duplicate_group_id
+file_id / sha512
+preferred_location_id
+status
+source
 ```
 
-Tags do not define the primary collection structure. A user's `Themes` final tree is not automatically equivalent to the Tag system.
+The database must not require creation of separate `File` identities for binary-identical copies.
+
+The designation of a `master` or preferred occurrence is a management decision and does not change the SHA512 identity.
 
 ---
 
-# 11. Collection and Collection Root
+# 18. Set Representation
 
-Collection configuration is defined by DOC-301 and DOC-302.
+Set Detection is defined by DOC-109.
 
-The database may store collection definitions and configured roots, including:
+A Set is primarily a physical directory grouping visually similar images.
 
-```text
-root_id
-collection_id
-path
-role
-access_policy
-enabled
-recursive
-```
-
-Roles are configuration concepts, not hard-coded directory names. Examples include `SOURCE`, `TRANSITION` and `FINAL`.
-
-The database must not hard-code physical names such as `TODO`, `AI`, `Anime` or `Themes`.
-
----
-
-# 12. Review Item
-
-Review Queue is defined by DOC-013.
-
-A Review Item may reference:
+Where Set metadata is stored in the database, it may include:
 
 ```text
-file_id
-module_id
-classification context
-reason
-suggested result
-confidence
-created_at
+set_id
+parent collection/location context
+physical path, where applicable
 status
 ```
 
-Review Queue is the common user-decision mechanism.
+A file may belong to a Set through its active `FileLocation` or through an explicit Set-membership relation, depending on implementation.
 
-There is no separate Migration Queue requirement in the current architecture. Migration is one possible result of a Review Queue decision.
+The database must not force Set identity to replace file identity.
 
 ---
 
-# 13. Relationships
+# 19. Collection Definition Storage
+
+Collection Definition is defined by DOC-301 and DOC-302.
+
+The database may store the currently active definition or its relevant persisted representation.
+
+At minimum, persisted configuration may include:
 
 ```text
-Collection
-   └── Collection Root
-
-File
-   ├── Analysis Result
-   ├── Classification Result
-   ├── File Event
-   ├── File Tag
-   └── Review Item
-
-Module
-   ├── Module Execution
-   ├── Analysis Result
-   └── File Event
+root_id
+path
+role
+enabled
+access_policy
+recursive / traversal settings
+collection tree identity
+node identity
+parent relationship
+classification boundary information
 ```
 
-The schema should avoid unnecessary direct database dependencies between analysis modules. Logical dependencies are satisfied through documented database state.
+The physical names `TODO`, `AI`, `Anime`, `Monster Girls`, `Western Animation`, `Themes` are not schema-level constants.
 
-For example, Character Analysis does not require a database-level foreign key to Universe Analysis merely because it may use universe information.
+The role of a root is configuration, not a hard-coded path name.
 
 ---
 
-# 14. Current State and History
+# 20. Collection Root and Access Policy
+
+A configured root may have one of the roles defined by DOC-302, for example:
+
+```text
+PRIMARY
+THEME_FALLBACK
+TODO
+AI
+IMPORT_SOURCE
+```
+
+A root also carries its configured access policy, for example:
+
+```text
+PROTECTED
+READ_ONLY
+MODIFY
+PLAYGROUND
+```
+
+The database stores the configured value; the consuming module remains responsible for enforcing the permitted operations.
+
+---
+
+# 21. Tags
+
+Tags are semantic metadata and are distinct from the physical folder tree.
+
+The usual relationship is:
+
+```text
+File
+  ↓
+FileTag
+  ↓
+Tag
+```
+
+A Theme used as a physical fallback destination is not automatically the same thing as a Theme tag.
+
+A file may retain theme metadata after it has been moved from the Theme fallback into a primary collection tree.
+
+---
+
+# 22. Current State Versus History
 
 The database contains both current-state information and historical information.
 
-Current-state fields support efficient normal operations. Historical entities and superseded results preserve previous states and decisions.
+Current-state records are used for normal module operation.
 
-The project does not require pure event sourcing. Ordinary current-state records combined with appropriate history are preferred where they provide a simpler and more practical design.
+Historical records preserve important past actions, decisions and previous results where required.
 
----
+The project does not require pure event sourcing.
 
-# 15. Manual User Decisions
-
-User decisions are first-class information.
-
-When a user manually corrects a classification or performs a correction workflow, the system should preserve:
-
-* the previous automatic result;
-* the user decision;
-* the resulting current classification where applicable;
-* the relevant file event.
-
-A subsequent automatic execution must not silently replace a protected manual decision.
-
-Detailed override and reprocessing rules belong to DOC-013 and relevant analysis/reprocessing specifications.
+A practical combination of current state plus selected immutable history is preferred.
 
 ---
 
-# 16. File Movement, Renaming and Content Change
+# 23. Ownership Rules
 
-Moving or renaming a file does not change its SHA512 identity.
+Each module owns the data it explicitly produces.
 
-The current path and filename are updated and an appropriate File Event should be generated.
+A module may:
 
-If binary content changes, the SHA512 changes. The database must then represent the new binary object rather than silently changing the identity of the previous SHA512 record.
+* read required shared information;
+* create its own analysis or classification results;
+* supersede or clear its own results according to its specification;
+* create appropriate execution and file events.
 
-Modules must not infer identity from path or filename alone.
+A module must not silently:
 
----
+* overwrite another module's result;
+* delete another module's protected user decision;
+* reinterpret another module's table as its own state;
+* establish direct runtime communication with another module.
 
-# 17. Database Ownership Rules
-
-Each module owns the data it is explicitly responsible for producing.
-
-A module may read required information, create its own results, supersede its own results according to its specification and create appropriate events.
-
-A module must not silently overwrite another module's results or user decisions.
-
-Shared infrastructure entities such as Module and Collection configuration are maintained by their responsible components.
+Shared infrastructure entities are maintained by their responsible components.
 
 ---
 
-# 18. Failure Handling
+# 24. Transaction and Failure Model
 
-A failure while processing one file must not unnecessarily roll back successfully persisted information about unrelated files.
+The logical database model must support partial, incremental progress.
 
-For example, successful records for A, B and C must not be discarded merely because processing D failed.
+Successful processing of files A, B and C must not be discarded solely because processing file D later fails.
 
-Exact transaction boundaries are defined by individual module specifications.
+Transaction boundaries may therefore be defined per file, per batch or according to another safe module-specific unit.
 
----
-
-# 19. Scalability
-
-The initial target is approximately:
-
-```text
-5,000,000 files
-```
-
-The model should remain viable for substantially larger collections.
-
-It should avoid unnecessary duplication, one table per analysis module, one column for every possible future feature, storing image binaries in the metadata database without justification, and operations requiring the entire collection in memory.
-
-Performance-critical indexes and database-engine-specific optimizations belong to implementation documentation.
+The exact transaction strategy is an implementation concern, but a module must not require a single global transaction covering millions of files merely to preserve logical consistency.
 
 ---
 
-# 20. Extensibility
-
-New analysis modules should normally be able to introduce new result types without redesigning the entire database.
-
-However, not every future feature should be forced into a generic key/value model. Features requiring strong relational semantics may justify dedicated entities or schema extensions.
-
-Database migrations are acceptable when they provide a meaningful architectural benefit.
-
----
-
-# 21. Integrity Rules
+# 25. Integrity Rules
 
 The implementation must enforce or validate where practical:
 
-* SHA512 uniqueness;
-* valid foreign-key relationships;
+* SHA512 uniqueness in `File`;
+* valid references between `File` and `FileLocation`;
 * valid module references;
-* valid collection/root references;
-* valid review-item references;
+* valid execution references;
+* valid Collection Definition/root references;
+* valid Review Queue references;
 * valid lifecycle transitions where practical;
-* absence of fabricated SHA512 values.
+* absence of fabricated SHA512 values;
+* no orphaned active `FileLocation` without a valid `File` identity.
 
-Two active File records must not normally represent the same SHA512.
+Multiple `FileLocation` rows may legitimately reference one `File`/SHA512.
 
----
-
-# 22. Security and Privacy
-
-The database may contain local filesystem paths and information about the user's collection.
-
-It is intended to operate locally and offline.
-
-Normal operation must not require Internet connectivity.
-
-Image binaries do not need to be stored in the metadata database merely to support collection management.
+Two different `File` identities must not normally use the same SHA512.
 
 ---
 
-# 23. Relationship with Other Documents
+# 26. Rebuild and Recovery Considerations
+
+Database Maintenance is defined by DOC-202.
+
+The schema must distinguish data that can be rebuilt from the filesystem from data that exists only as project history or user decision.
+
+Typically rebuildable information includes:
 
 ```text
-DOC-001  Overall project specification
-DOC-002  Database and storage architecture
-DOC-003  System architecture
-DOC-005  Logical database schema
-DOC-008  Configuration management
-DOC-010  Module interface
-DOC-012  File identity model
-DOC-013  Review Queue
+FileLocation state
+current file metadata
+current SHA512 observations
 ```
 
-DOC-005 must not redefine rules owned by DOC-012, DOC-013 or DOC-008.
+Potentially non-rebuildable or historically important information includes:
 
-Where a conflict is discovered, the authoritative document must be updated rather than maintaining competing definitions.
+```text
+user decisions
+review history
+module execution history
+historical classification results
+manual correction history
+```
+
+A rebuild procedure must therefore not assume that every database row is equivalent to a fresh filesystem scan.
 
 ---
 
-# 24. Acceptance Criteria
+# 27. Scalability
+
+The schema targets at least:
+
+```text
+5,000,000 logical File identities
+```
+
+and may need to support substantially more physical `FileLocation` records because duplicates can create multiple physical occurrences of the same content.
+
+The design should avoid:
+
+* one table per file;
+* one table per execution;
+* one column for every future analysis feature;
+* storing image binaries in the metadata database without justification;
+* operations requiring the entire collection in memory;
+* unnecessary duplication of large textual paths or analysis payloads.
+
+Indexes and database-engine-specific optimisations are implementation concerns.
+
+---
+
+# 28. Extensibility
+
+New modules should normally be able to add their own result structures without redesigning the entire database.
+
+A new module should not be required to modify core `File` identity merely to introduce a new analysis feature.
+
+A dedicated table or relational entity is appropriate when a feature has strong relational semantics or needs efficient querying.
+
+A generic key/value structure is not mandatory for all future features.
+
+Schema migrations are acceptable when they provide a clear architectural benefit.
+
+---
+
+# 29. Offline Operation
+
+The database is intended for local/offline project operation.
+
+Normal database access and module execution must not require an Internet connection.
+
+No project database table is intended to be an online service or cloud dependency.
+
+---
+
+# 30. Relationship with Other Documents
+
+```text
+DOC-001  Project Specification
+DOC-002  Database Architecture
+DOC-003  System Architecture
+DOC-005  Database Schema
+DOC-008  Configuration Manager
+DOC-009  Database Access Layer
+DOC-010  Module Interface Specification
+DOC-011  Logging Standard
+DOC-012  File Identity Model
+DOC-013  Review Queue
+DOC-014  Module Result Lifecycle and Cleanup
+DOC-109  Set Detection and Grouping
+DOC-201  AutoSort
+DOC-202  Database Maintenance
+DOC-204  Duplicate Management
+DOC-301  Collection Definition Wizard
+DOC-302  Collection Definition Format
+```
+
+DOC-005 defines database structure.
+
+DOC-012 defines file identity semantics.
+
+DOC-013 defines Review Queue semantics.
+
+DOC-014 defines module-result lifecycle and cleanup semantics.
+
+DOC-302 defines Collection Definition field meaning.
+
+DOC-005 should not silently redefine those contracts; when a conflict is discovered, the authoritative document must be updated deliberately.
+
+---
+
+# 31. Acceptance Criteria
 
 The schema is architecturally acceptable when:
 
-* SHA512 is the logical binary-content identifier;
-* internal `file_id` does not replace SHA512 as file identity;
-* rename and move do not alter file identity;
-* a binary-content change produces a new SHA512 identity;
-* analysis results are associated with the correct file and producing module;
-* automatic and manual classifications can be distinguished;
-* manual decisions cannot be silently overwritten;
-* module executions are recorded independently from files;
+* SHA512 uniquely identifies binary content;
+* `File` is separated from physical `FileLocation` so duplicate physical copies can coexist under one content identity;
+* `file_id` is treated only as a technical identifier;
+* moves and renames preserve SHA512 identity;
+* a binary-content change produces a new content identity;
+* Scanner can register new physical instances incrementally;
+* analysis results are owned by their producing modules;
+* modules can be executed independently and repeatedly;
+* module-result cleanup can remove one module's results without deleting file identity or unrelated results;
+* automatic and manual classification results are distinguishable;
+* protected manual decisions survive unrelated result cleanup;
+* Review Queue is the common user-decision mechanism;
+* Collection Definition can be represented without hard-coded physical directory names;
+* duplicate management can operate on multiple physical occurrences of identical SHA512 content;
+* Set information does not replace file identity;
 * important history can be preserved;
-* collection roots can be configured without hard-coded directory names;
-* Review Queue is sufficient for user decisions without a separate Migration Queue;
-* the schema can support approximately 5 million files without requiring the entire collection in memory;
-* modules can exchange persistent information through the shared database without direct module-to-module communication.
+* partial module execution can be persisted safely;
+* the schema can support approximately 5 million logical files and potentially more physical locations;
+* modules can exchange persistent state through the shared database without direct module-to-module communication.
 
 ---
 
