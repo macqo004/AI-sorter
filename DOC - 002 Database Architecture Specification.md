@@ -1,4 +1,4 @@
-# DOC-002
+# DOC - 002
 
 # Database and Project Storage Architecture
 
@@ -496,4 +496,4 @@ The architecture is considered correctly implemented when:
 
 ---
 
-# End of DOC-002
+# End of DOC - 002
