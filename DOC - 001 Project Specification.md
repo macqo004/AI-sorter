@@ -1,4 +1,4 @@
-# DOC-001
+# DOC - 001
 
 # Project Specification
 
