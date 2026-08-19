@@ -1,4 +1,4 @@
-# DOC-000
+# DOC - 000
 
 # Documentation Standards
 
