@@ -8,9 +8,9 @@
 
 **Module:** Color Analysis
 
-**Version:** 2.0
+**Version:** 2.1
 
-**Status:** Draft
+**Status:** Design Specification
 
 **Depends on:**
 
@@ -20,6 +20,8 @@ DOC-008
 DOC-010
 DOC-011
 DOC-012
+DOC-014
+DOC-205
 
 ---
 
@@ -130,7 +132,7 @@ IS_MONOCHROME
 IS_MOSTLY_MONOCHROME
 ```
 
-Each result should contain, at minimum, information corresponding to:
+Each result may include supporting metadata such as:
 
 ```text
 file identity
@@ -138,9 +140,12 @@ module
 feature
 value
 confidence where applicable
-module/rule version
+execution reference
+analysis/model/rule metadata where useful for diagnostics
 creation time
 ```
+
+Such metadata is informational. It is not used as an automatic stale-result mechanism. Module-result lifecycle and cleanup are governed by DOC-014 and DOC-205.
 
 The module owns the results that it produces. It must not overwrite analysis results belonging to another module.
 
@@ -210,21 +215,23 @@ means the module is highly confident that the image satisfies the `mostly black-
 
 # 9. Processing Rules
 
-A module execution should process a file when the current analysis state indicates that a valid result is required.
+A module execution processes files whose current database state indicates that a Color Analysis result is required for the selected execution scope.
 
-For the current binary identity, identified by SHA512, an existing current result produced by the same module and compatible rule/module version may be reused.
+For the current binary identity, identified by SHA512, an existing current result may be reused rather than recalculated unnecessarily.
 
-The module should skip unnecessary reprocessing when the applicable result is already current.
+A change to the following does **not** automatically invalidate existing results or trigger a reprocessing run:
 
-The module must not assume that a file is permanently analysed after one execution. Reprocessing may be required when:
+* module implementation version;
+* analysis/model version;
+* analysis rules;
+* thresholds or configuration;
+* other internal implementation changes.
 
-* the binary SHA512 changes;
-* the module version changes;
-* the analysis rules change;
-* a future reprocessing policy invalidates the previous result;
-* the user explicitly requests reprocessing.
+If the user wants the collection to be recalculated using a changed implementation or rules, the user explicitly uses **DOC-205 – Module Result Cleanup Utility** to clear the Color Analysis results and then starts Color Analysis again.
 
-Detailed cross-module reprocessing orchestration belongs to future reprocessing architecture and the relevant module configuration.
+A binary-content change that results in a different SHA512 is different: the new binary identity requires its own Color Analysis result.
+
+A rename or move that does not change SHA512 does not invalidate the Color Analysis result merely because the path changed.
 
 ---
 
@@ -248,7 +255,7 @@ SHA512 = BBBB
 
 the new binary identity requires a new Color Analysis result.
 
-The result belonging to `AAAA` remains associated with the historical `AAAA` record and must not be silently reused as the result for `BBBB`.
+The result belonging to `AAAA` remains associated with the historical `AAAA` identity and must not be silently reused as the result for `BBBB`.
 
 A rename or move that does not change SHA512 does not invalidate the Color Analysis result merely because the path changed.
 
@@ -407,7 +414,9 @@ Color Analysis is considered compliant when it can:
 * produce the four defined colour-analysis results;
 * associate every result with the correct SHA512-based binary identity;
 * reuse current valid results when applicable;
-* invalidate/recompute results when the binary identity or relevant analysis version changes;
+* avoid automatic invalidation solely because the module/model/rules changed;
+* support full recalculation through the user-controlled DOC-205 cleanup workflow followed by a new module execution;
+* invalidate results naturally when the binary identity changes;
 * write results through the shared database;
 * operate independently of other module executions;
 * continue after recoverable per-file failures;

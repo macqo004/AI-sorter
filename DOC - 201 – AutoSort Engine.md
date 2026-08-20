@@ -2,14 +2,10 @@
 
 # AutoSort Engine
 
-**Project:** AI Image Collection Management System
-
-**Document:** DOC-201
-
-**Module:** AutoSort Engine
-
-**Version:** 2.2
-
+**Project:** AI Image Collection Management System  
+**Document:** DOC-201  
+**Module:** AutoSort Engine  
+**Version:** 2.3  
 **Status:** Draft
 
 **Depends on:**
@@ -27,6 +23,7 @@ DOC-107
 DOC-108
 DOC-109
 DOC-302
+DOC-204
 
 ---
 
@@ -71,7 +68,7 @@ AutoSort shall:
 * move files when authorised;
 * create authorised AI workspace directories when the configured workflow permits them;
 * create authorised Set directories inside AI or an already established primary collection path when required;
-* maintain one canonical physical copy of each binary file;
+* maintain one **canonical active physical location** for a binary file when its workflow calls for consolidation;
 * prevent repeated automatic moves from undoing protected user decisions;
 * record performed actions;
 * support repeated independent executions;
@@ -83,26 +80,34 @@ AutoSort shall not:
 * perform image analysis;
 * calculate SHA512;
 * rewrite another module's analysis results;
-* create duplicate physical files;
+* create intentional duplicate physical files as part of placement;
 * create shortcuts or hardlinks as alternative collection copies;
 * automatically extend the primary collection definition;
 * arbitrarily invent new FINAL collection branches.
 
 ---
 
-# 4. Single Physical File Rule
+# 4. Canonical Physical Location and Duplicate Instances
 
-The system follows:
+The project distinguishes between the logical binary identity and its physical filesystem occurrences.
 
 ```text
-one binary object
-    =
-one canonical physical location
+SHA512
+   ↓
+one logical binary content identity
+   ↓
+possibly multiple physical occurrences
 ```
 
-A file must not be intentionally duplicated across primary collection trees, Theme trees, AI workspaces or other classification trees.
+AutoSort's normal organisation goal is to maintain **one preferred/canonical active physical location** for a file within the managed collection workflow.
 
-The database may contain multiple classifications and analysis results for the same file, but the filesystem contains one canonical physical instance.
+This does not mean that multiple physical occurrences can never exist. Pre-existing duplicates, backup copies, import copies or copies detected by Duplicate Management may temporarily or intentionally exist in more than one location.
+
+Such instances share the same SHA512 and represent the same logical binary content. Their relationship is managed by DOC-204.
+
+AutoSort must not create an additional physical copy simply to satisfy a destination rule. When the workflow requires moving a file, it should move the existing physical occurrence rather than copy it.
+
+Where more than one physical occurrence already exists, AutoSort must not silently delete the additional instances merely to enforce the canonical-location preference. Duplicate cleanup remains a separate explicit workflow governed by DOC-204 and user decisions.
 
 ---
 
@@ -447,7 +452,7 @@ Persistent information shared between analysis modules is exchanged through the 
 AutoSort is considered compliant when it can:
 
 * apply database-backed classifications to physical organisation;
-* maintain one canonical physical copy per binary file;
+* maintain one canonical active physical location when consolidation is required, while allowing pre-existing physical duplicate instances to remain until handled by the separate duplicate workflow;
 * treat all configured primary collection trees as higher priority than Theme fallback;
 * use Theme as fallback when no sufficiently reliable primary destination exists;
 * move files from Theme fallback into a valid primary destination when one becomes available;

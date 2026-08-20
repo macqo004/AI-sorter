@@ -2,375 +2,329 @@
 
 **Project:** AI Image Collection Management System  
 **Document:** DOC - 403  
-**Version:** 1.0  
+**Version:** 2.0  
 **Status:** Design Specification
+
+**Depends on:** DOC - 005, DOC - 012, DOC - 101, DOC - 301, DOC - 302
 
 ---
 
 # 1. Purpose
 
-This document defines how the project handles two filesystem/database inconsistencies:
+This document defines the handling of two deterministic filesystem/database conditions:
 
-1. a database file record exists, but the corresponding physical file no longer exists;
-2. a physical file exists in a configured scan location, but no corresponding database record exists.
+1. a registered physical file no longer exists in the managed filesystem;
+2. a physical file exists in configured scan scope but has no current database identity.
 
-The intended model is deliberately simple:
+The project deliberately uses a simple active-state policy:
 
 ```text
-DB record without physical file
-        ↓
-record is removed
+verified physical absence
+    ↓
+remove obsolete active database record/location
 
-Physical file without DB record
-        ↓
-file is registered in DB
+physical file without identity
+    ↓
+Scanner registers it
 ```
 
-The module does not invent a separate permanent orphan archive and does not keep ordinary missing-file records merely for historical retention.
+No permanent ordinary missing-file archive is required.
+
+Historical records/events may be retained separately where explicitly needed.
 
 ---
 
-# 2. Relationship with File Identity
+# 2. Identity Model
 
-File identity follows DOC - 012 and DOC - 005.
+The module follows DOC - 012 and DOC - 005:
 
-The logical identity of binary content is its SHA512.
+```text
+SHA512
+    = logical binary-content identity
 
-A physical file is registered in the database only after the current filesystem object can be inspected sufficiently to establish its identity.
+File
+    = logical content record
 
-A missing filesystem object has no current physical instance to maintain.
+FileLocation
+    = physical occurrence
+```
+
+If the same SHA512 is found at another location, it is another FileLocation of the same File identity.
 
 ---
 
 # 3. Scope
 
-The module operates on configured filesystem locations that are eligible for database reconciliation.
-
-The scope may include, according to configuration and access policy:
+The reconciliation scope may include configured:
 
 ```text
 TODO
 AI
-FINAL
-other configured source locations
+PRIMARY
+THEME_FALLBACK
+IMPORT_SOURCE
+other configured source roots
 ```
 
-The module must respect Directory Access Policy and must not assume that every directory on the machine belongs to the project.
+The module must respect Collection Definition and access policy.
+
+A directory is considered part of project scope only when configuration says so.
 
 ---
 
-# 4. Missing File Records
+# 4. Verified Missing Physical File
 
-A missing file record exists when a database record points to a physical file that cannot be found at its current recorded location during reconciliation.
+A missing physical occurrence is a registered FileLocation whose expected physical object cannot be found after the relevant root has been successfully inspected.
 
-Before removal, the module should verify that the absence is real rather than caused by a temporary access problem.
+Before treating a file as missing, the system must rule out temporary access problems.
 
-Examples of conditions requiring retry or error reporting rather than immediate deletion include:
-
-* filesystem unavailable;
-* network or removable storage temporarily disconnected;
-* insufficient permission to inspect the directory;
-* path temporarily inaccessible;
-* scan interrupted before the relevant location was examined.
-
-A file should be considered missing only after the configured reconciliation procedure has established that the physical object is absent from the applicable scope.
-
----
-
-# 5. Removal of Missing Records
-
-When a file has been verified as physically absent, its obsolete database record is removed.
-
-The default rule is:
+The following are not proof of deletion:
 
 ```text
-physical file permanently absent
-        ↓
-remove corresponding file record
+unavailable drive
+network storage temporarily disconnected
+permission denied
+locked/inaccessible directory
+interrupted scan
+unreadable root
 ```
 
-Removing the record does not mean that a future file with the same SHA512 is forbidden from being registered again.
-
-If the same binary content is later found again, Scanner may register it as a currently existing file according to normal scanning rules.
+If the root itself cannot be reliably inspected, existing records remain unchanged and the run reports the root as unavailable.
 
 ---
 
-# 6. No Ordinary Missing Archive
+# 5. Removal of Verified Missing Records
 
-The project does not maintain a permanent `MISSING` archive solely to preserve records for files that have disappeared from disk.
+When physical absence has been confirmed, the obsolete active FileLocation shall be removed.
 
-Historical events such as `SCANNED`, `MOVED`, `DELETED` or reconciliation actions may be retained according to the project's logging and history rules, but the obsolete active file record itself is removed when the physical absence has been verified.
-
-This keeps the active database representative of files that actually exist in the managed collection.
-
----
-
-# 7. Orphan Files
-
-An orphan file is a physical file found inside a configured scanning scope for which no current database record exists.
-
-The default action is registration, not rejection.
-
-```text
-physical file found
-        ↓
-SHA512 calculated
-        ↓
-create File record
-        ↓
-create physical FileLocation record
-        ↓
-file becomes available to normal module processing
-```
-
-The file is therefore not treated as a special permanent category merely because it was discovered without a previous database record.
-
----
-
-# 8. Registration of a New Physical File
-
-When an orphan file is discovered, registration should establish the information required by DOC - 005 and DOC - 012, including where applicable:
-
-```text
-SHA512
-file identity
-current physical path
-filename
-extension
-size
-filesystem modification time
-first seen
-current location/root
-```
-
-Additional metadata may be populated by Scanner or later modules according to their own specifications.
-
-A failed SHA512 calculation must not create a fabricated or placeholder identity.
-
----
-
-# 9. Existing SHA512 Found at Another Location
-
-When a physical file is found and its SHA512 already exists in the database, the system shall treat the new filesystem object as another physical occurrence of the same logical content.
+If no other active FileLocation remains for that File identity, the active File record is removed according to the current project policy.
 
 Example:
 
 ```text
-DB:
-SHA512 = ABC...
-Location = A:\Collection\image.jpg
+File SHA512 = ABC...
 
-Scanner finds:
-B:\Backup\image.jpg
-SHA512 = ABC...
+Location A = missing
+Location B = active
 ```
 
-The result is not a second independent binary identity.
-
-Instead:
+Result:
 
 ```text
-SHA512 ABC...
-    ├── Location A
-    └── Location B
+remove Location A
+retain File ABC and Location B
 ```
 
-This is an expected input to Duplicate Management and filesystem reconciliation.
+If the File has no remaining active occurrence:
 
-The system does not design its normal workflow around the possibility that two genuinely different images will intentionally share the same SHA512. Such a case is treated as an integrity problem.
+```text
+remove obsolete active File record
+```
+
+A retained historical identity may be represented as ARCHIVED only when explicitly preserved by the project, not merely because a file went missing.
 
 ---
 
-# 10. Interaction with Scanner
+# 6. Historical Information
 
-Scanner is responsible for discovering files and calculating their SHA512 according to DOC - 101 and DOC - 012.
+Removing an obsolete active File record does not require deleting every historical event related to that content.
 
-Orphan File Management does not require a second independent hashing implementation.
-
-A typical workflow is:
+Events such as:
 
 ```text
+SCANNED
+MOVED
+RENAMED
+DELETED
+RECONCILED
+```
+
+may be retained according to the project's history/retention policy.
+
+Historical information must not be mistaken for an active file record.
+
+---
+
+# 7. Physical File Without Database Identity
+
+A physical file found in configured scan scope with no current File identity is an orphan only in the database sense.
+
+The default action is registration, not rejection:
+
+```text
+physical file
+    ↓
 Scanner
-   ↓
-filesystem discovery
-   ↓
+    ↓
+calculate SHA512
+    ↓
+lookup existing File
+    ├── found → add/update FileLocation
+    └── absent → create File + FileLocation
+```
+
+DOC - 403 does not implement a second independent hashing/registration system.
+
+---
+
+# 8. Existing SHA512 at Another Location
+
+If a discovered physical file has a SHA512 already represented by an existing File:
+
+```text
+File ABC...
+    ├── Location A
+    └── Location B (newly discovered)
+```
+
+The new object is registered as another FileLocation of the same logical File identity.
+
+It is not a second File identity.
+
+Duplicate Management may subsequently analyse the physical duplication.
+
+---
+
+# 9. File Registration Data
+
+Normal registration should establish information required by DOC - 005 / DOC - 012, including where applicable:
+
+```text
 SHA512
-   ↓
-lookup in database
-   ├── existing identity → update/reconcile location
-   └── unknown identity  → create file record
+file_id if used
+location_id
+current_path
+filename
+extension
+size
+modified_time
+first_seen
+last_seen
+root_id
+state
 ```
 
-This module defines the reconciliation outcome; Scanner remains responsible for the actual scanning operation.
+Additional metadata may be populated by Scanner or later modules.
+
+A failed SHA512 calculation must not create a valid identity.
 
 ---
 
-# 11. Interaction with Collection Definition
+# 10. File Moved from Previous Path
 
-Collection Definition determines whether a filesystem location is inside a configured project scope and what role that root has.
+A file may have moved before the database path was updated.
 
-A file found in a configured location may therefore be registered even when its final semantic classification is unknown.
+If Scanner finds the same SHA512 at a new valid location, the existing File identity is retained and the physical location is reconciled.
 
-Registration does not imply approval of the file's final placement.
+The old FileLocation is removed or marked inactive according to the current location-state implementation after the new occurrence is verified.
+
+This is a location change, not a new binary identity.
+
+---
+
+# 11. Interaction with Scanner
+
+Scanner remains responsible for:
+
+* filesystem traversal;
+* SHA512 calculation;
+* File identity lookup/create/reactivation;
+* FileLocation discovery/update;
+* execution logging.
+
+DOC - 403 defines the desired reconciliation result and safety rules.
+
+It must not create a parallel scanner implementation.
+
+---
+
+# 12. Interaction with Collection Definition
+
+Collection Definition determines whether a physical location belongs to managed scope.
+
+Registration of a physical file does not imply that its final semantic classification is correct.
 
 For example:
 
 ```text
-FINAL/Winx Club/image.jpg
+PRIMARY/Winx Club/image.jpg
 ```
 
-may be registered because it physically exists there even if later analysis determines that the image is probably from another universe.
+may be registered even if later analysis suggests another universe.
 
-Classification consistency is handled by the appropriate analysis and Review Queue workflow.
-
----
-
-# 12. Interaction with Review Queue
-
-A missing-file reconciliation is normally not a Review Queue decision because the rule is deterministic once absence has been verified.
-
-Likewise, finding a file without a database record does not normally require Review Queue approval. The file is simply registered.
-
-Review Queue may become involved later when classification, placement, duplicate handling, or another non-deterministic decision requires the user's judgement.
+Classification correction belongs to the analysis/Review Queue/AutoSort workflow.
 
 ---
 
-# 13. Interaction with Duplicate Management
+# 13. Review Queue
 
-Orphan registration and duplicate handling are separate operations.
+Missing-file and orphan registration are normally deterministic and do not require Review Queue.
 
-When the discovered file has a SHA512 already present in the database, the database must represent the additional physical occurrence rather than creating an unrelated binary identity.
+Review Queue may become involved later for:
 
-Duplicate Management may then determine whether one occurrence should be treated as the preferred master or whether the occurrences require user review.
-
-This module does not delete duplicate physical files.
+* classification;
+* placement;
+* duplicate handling;
+* ambiguous filesystem state.
 
 ---
 
-# 14. Interaction with Collection Consistency Checker
+# 14. Safety Rules
 
-DOC - 401 detects possible classification/location inconsistencies in FINAL.
+The module shall enforce:
 
-DOC - 402 reconciles broader consistency between filesystem, database and Collection Definition.
+1. Do not remove records because an entire root is temporarily inaccessible.
+2. Confirm physical absence before removing a FileLocation or active File record.
+3. Register real physical files rather than ignoring them.
+4. Reuse existing SHA512 identity when a physical duplicate is found.
+5. Never fabricate a SHA512.
+6. Do not delete physical files as part of orphan/missing management.
+7. Do not perform semantic classification.
+8. Do not create FINAL structure.
+9. Preserve protected user decisions.
 
-DOC - 403 handles the narrower identity-existence problem:
+---
+
+# 15. Repeated Execution
+
+The operation is designed to run repeatedly.
+
+Example:
 
 ```text
-Does the physical file exist?
-Does the database record exist?
+Run 1
+file absent but root unavailable
+→ leave DB unchanged
+
+Run 2
+root reachable
+file confirmed absent
+→ remove obsolete active record
+
+Run 3
+same binary reappears
+→ Scanner creates/reactivates the File identity
 ```
 
-It does not replace the broader checks performed by DOC - 401 or DOC - 402.
+Repeated execution must be idempotent for already reconciled state.
 
 ---
 
-# 15. Safe Handling of Missing Locations
+# 16. Logging
 
-The system must distinguish a real missing file from a location that simply could not be inspected.
+Operations should be logged according to DOC - 011 and DOC - 007.
 
-For example:
-
-```text
-Drive disconnected
-        ≠
-files deleted
-```
-
-Therefore a reconciliation run must not delete thousands of database records merely because an entire configured root was temporarily unavailable.
-
-When a root cannot be inspected reliably, the run should report the root as unavailable and leave its existing file records unchanged until a successful scan can verify their absence.
-
----
-
-# 16. State Transitions
-
-The intended logical transitions are:
-
-```text
-Physical file exists + DB record exists
-        ↓
-normal state
-
-Physical file absent + DB record exists
-        ↓
-verified missing
-        ↓
-remove file record
-
-Physical file exists + DB record absent
-        ↓
-orphan discovered
-        ↓
-create file record
-
-Physical file exists + same SHA512 already known
-        ↓
-add/reconcile physical location
-```
-
-The exact database operations are implementation details of DOC - 005 and the Scanner/reconciliation implementation.
-
----
-
-# 17. Manual Deletion
-
-If the user intentionally deletes a physical file, the next successful reconciliation should remove its obsolete database file record.
-
-The system may preserve an historical event recording that the file was deleted, subject to the project's history and logging rules.
-
-The historical event is not a substitute for an active file record.
-
----
-
-# 18. File Moved Outside the Previous Path
-
-A file may legitimately be moved without its old database path being immediately updated.
-
-A subsequent successful scan may find the same SHA512 at a new location.
-
-The system should reconcile the existing logical file identity with its new physical location rather than creating a second logical file identity.
-
-If the old location is no longer valid and the new location is confirmed, the old location record may be removed while the new location is retained.
-
----
-
-# 19. Processing of Newly Registered Files
-
-After an orphan file is registered, its analysis state begins according to DOC - 014.
-
-For example:
-
-```text
-new file
-    ↓
-Scanner registers identity
-    ↓
-IRL = NOT_PROCESSED
-Screenshot = NOT_PROCESSED
-Universe = NOT_PROCESSED
-Character = NOT_PROCESSED
-...
-```
-
-The registration process does not automatically require all analysis modules to run.
-
-Modules remain independently executable.
-
----
-
-# 20. Logging
-
-Reconciliation operations should be logged according to DOC - 011.
-
-Logs should identify, where applicable:
+The summary should include:
 
 ```text
 execution_id
-root/path inspected
-files checked
-missing records removed
-new files registered
-existing SHA512 occurrences reconciled
+roots inspected
+physical files checked
+verified missing locations removed
+Files removed
+new Files registered
+new FileLocations registered
+known-SHA512 occurrences reconciled
 unavailable roots
 errors
 completion status
@@ -378,34 +332,44 @@ completion status
 
 ---
 
-# 21. Safety Principles
+# 17. Relationship with Other Documents
 
-The module follows these principles:
+```text
+DOC - 005  Database Schema
+DOC - 012  File Identity Model
+DOC - 101  Scanner
+DOC - 201  AutoSort
+DOC - 202  Database Maintenance
+DOC - 204  Duplicate Management
+DOC - 402  Collection Integrity and Reconciliation
+DOC - 404  Recovery and Rescan Procedures
+```
 
-1. A missing file record is removed only after physical absence is verified.
-2. Temporary inability to access a root must not be treated as mass deletion.
-3. A physical file without a record is registered rather than ignored.
-4. An existing SHA512 represents the same logical content even when found at multiple locations.
-5. This module does not delete physical files.
-6. This module does not automatically classify files.
-7. This module does not create FINAL structure.
-8. Duplicate selection remains the responsibility of Duplicate Management and user review where required.
+Responsibility separation:
+
+```text
+DOC - 101 → discover and register
+DOC - 403 → define verified orphan/missing outcomes
+DOC - 204 → duplicate management
+DOC - 402 → broader cross-source reconciliation
+DOC - 404 → recovery procedures
+```
 
 ---
 
-# 22. Acceptance Criteria
+# 18. Acceptance Criteria
 
 DOC - 403 is compliant when it can:
 
-* reliably identify database records whose physical files are absent;
-* remove verified obsolete file records;
-* avoid deleting records when an entire root is merely inaccessible;
-* discover physical files that have no database record;
-* register newly discovered files using their SHA512 identity;
-* reconcile an already known SHA512 found at an additional location;
-* cooperate with Scanner, Database Schema, Duplicate Management and Collection Definition;
-* leave classification and user-decision logic to the appropriate modules;
-* operate offline and on large collections.
+* distinguish inaccessible roots from confirmed missing files;
+* remove obsolete active FileLocation records after verified absence;
+* remove an obsolete active File record when no active occurrence remains, according to project policy;
+* preserve intentionally retained historical identities separately;
+* register physical files without current database identity through Scanner;
+* associate newly found physical copies with an existing SHA512 File identity;
+* preserve SHA512 identity across moves and renames;
+* operate safely on large collections;
+* avoid classification, duplicate deletion and FINAL structure creation.
 
 ---
 
