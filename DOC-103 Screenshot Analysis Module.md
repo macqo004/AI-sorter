@@ -8,9 +8,9 @@
 
 **Module:** Screenshot Analysis
 
-**Version:** 2.0
+**Version:** 2.1
 
-**Status:** Draft
+**Status:** Design Specification
 
 **Depends on:**
 
@@ -20,6 +20,8 @@ DOC-008
 DOC-010
 DOC-011
 DOC-012
+DOC-014
+DOC-205
 
 ---
 
@@ -121,17 +123,20 @@ HAS_GAME_HUD
 FILENAME_SUGGESTS_SCREENSHOT
 ```
 
-Each result should contain, where applicable:
+Each result may include supporting metadata such as:
 
 ```text
-file identity / file_id
-module_id
+file identity
+module
 feature
 value
-confidence
-module_version
+confidence where applicable
+execution reference
+analysis/model/rule metadata where useful for diagnostics
 created_at
 ```
+
+Such metadata is informational and is not an automatic stale-result mechanism. Module-result lifecycle and cleanup are governed by DOC-014 and DOC-205.
 
 The logical ownership of these results belongs to Screenshot Analysis.
 
@@ -244,25 +249,15 @@ Module-specific thresholds may determine whether a result is considered strong e
 
 # 9. Processing and Reprocessing
 
-The module may avoid reprocessing a file when a valid current result already exists for the same:
+The module may avoid reprocessing a file when a valid current result already exists for the same binary identity and the current execution does not require a fresh calculation.
 
-```text
-SHA512
-module version
-relevant analysis configuration/rule version
-```
+A change to the module implementation, model, analysis rules or configuration does not automatically clear results and does not automatically start a new analysis run.
 
-An existing result may require reprocessing when:
+When the user wants a complete recalculation using changed logic, the user shall use **DOC-205 – Module Result Cleanup Utility** to clear Screenshot Analysis results and then execute Screenshot Analysis again.
 
-* SHA512 changes;
-* the module version changes in a way that affects results;
-* analysis rules change;
-* relevant configuration changes;
-* an explicit reprocessing operation is requested.
+A different filesystem path does not invalidate an otherwise unchanged binary merely because the path changed.
 
-The module must not treat a different filesystem path as a reason to reanalyse an otherwise unchanged binary unless its own specification requires path-based evidence.
-
-If SHA512 changes, results associated with the previous binary identity do not become results for the new identity.
+If SHA512 changes, the result belongs to the previous binary identity and must not be reused for the new binary object.
 
 ---
 
@@ -337,7 +332,6 @@ The summary should include, where applicable:
 processed
 skipped
 errors
-reprocessed
 execution duration
 ```
 
@@ -418,8 +412,10 @@ Screenshot Analysis is considered compliant when it can:
 * detect screenshot-related evidence;
 * record the defined initial analysis results in the shared database;
 * include meaningful confidence information where applicable;
-* avoid reprocessing unchanged results when the applicable module/rule version is unchanged;
-* reprocess when SHA512 or relevant analysis logic changes;
+* reuse unchanged current results where appropriate;
+* avoid automatic invalidation solely because the module/model/rules changed;
+* support full recalculation through DOC-205 followed by a new module execution;
+* respect SHA512 identity changes;
 * continue after recoverable per-file errors;
 * operate independently of other module processes;
 * communicate persistent results through the shared database;
