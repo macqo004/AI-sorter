@@ -6,7 +6,7 @@
 
 **Document:** DOC - 016
 
-**Version:** 1.0
+**Version:** 1.1
 
 **Status:** Design Specification
 
@@ -1466,7 +1466,55 @@ The planned sequence should preserve the project's independent-module architectu
 
 ---
 
-# 58. Acceptance Criteria
+# 58. Third-Party Components and Licensing
+
+The implementation shall minimize unnecessary use of third-party copyrighted or otherwise protected material when doing so does not materially harm project functionality, maintainability or safety.
+
+Third-party material may be included only when its licence or another applicable legal basis clearly permits the intended use. Free availability, public accessibility, or the ability to download a component does not by itself establish a right to redistribute, modify, bundle or commercially use it.
+
+This policy applies to all external materials used by or distributed with the project, including:
+
+* source code and Python packages;
+* native libraries and runtimes;
+* machine-learning models and model weights;
+* datasets and sample data;
+* images, icons and other graphics;
+* fonts;
+* executable utilities;
+* documentation or other bundled assets.
+
+Before a third-party component becomes part of the implementation or packaged application, its licensing information should be recorded in a project-maintained dependency/component inventory containing at least:
+
+```text
+component name
+source
+version
+licence / usage terms
+intended use
+redistribution requirements
+attribution / notice requirements where applicable
+```
+
+A component with unclear, missing or incompatible licensing terms shall not be adopted merely because it is technically convenient. Where practical, a functionally suitable alternative with clearer permissible licensing shall be preferred.
+
+For model files in particular, the project shall distinguish between:
+
+```text
+model can be downloaded
+model can be used
+model can be redistributed
+model can be bundled with this application
+```
+
+These are separate permissions and must not be assumed to be equivalent.
+
+The portable package shall include only third-party components and assets whose licensing conditions permit the planned distribution. Where a component must remain separately downloadable or requires separate notices, the packaging and documentation shall reflect that requirement.
+
+The project does not require zero third-party components. The requirement is to avoid unnecessary legal risk and to prefer components with clear, compatible licensing whenever practical.
+
+---
+
+# 59. Acceptance Criteria
 
 The implementation baseline is considered satisfied when:
 
@@ -1490,11 +1538,13 @@ The implementation baseline is considered satisfied when:
 * the project can be built and packaged reproducibly;
 * database schema versioning is explicit;
 * recovery after interruption does not depend on pretending an unfinished operation succeeded;
-* tests cover the foundation before large-scale AI implementation begins.
+* tests cover the foundation before large-scale AI implementation begins;
+* third-party components included in the implementation or distribution have documented licensing information compatible with their intended use;
+* the packaged application contains no component whose redistribution rights are unknown or assumed merely from free availability.
 
 ---
 
-# 59. Relationship with Existing Documentation
+# 60. Relationship with Existing Documentation
 
 DOC - 016 does not replace existing specifications.
 
@@ -1566,7 +1616,7 @@ The individual module specifications remain authoritative for module-specific be
 
 ---
 
-# 60. Non-Goals
+# 61. Non-Goals
 
 DOC - 016 does not define:
 
@@ -1583,7 +1633,7 @@ These remain implementation-specific or are defined by other documents.
 
 ---
 
-# 61. Core Implementation Principles
+# 62. Core Implementation Principles
 
 The implementation shall follow these principles:
 
@@ -1602,7 +1652,8 @@ The implementation shall follow these principles:
 13. **Per-file failures do not unnecessarily destroy successful work.**
 14. **Recovery is designed into operations rather than added after failure.**
 15. **The implementation follows the documented architecture instead of recreating an undocumented architecture in code.**
+16. **Third-party components and assets are selected with licensing and redistribution rights considered explicitly.**
 
 ---
 
-# 62. End of DOC - 016
+# End of DOC - 016
