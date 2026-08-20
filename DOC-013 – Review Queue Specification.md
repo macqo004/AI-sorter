@@ -1,6 +1,6 @@
 # DOC-013 – Review Queue Specification
 
-**Version:** 2.2
+**Version:** 2.3
 
 **Status:** Draft
 
@@ -192,6 +192,8 @@ The database should preserve at least:
 A later module execution may continue to produce new automatic observations, but it must not automatically replace a protected manual decision.
 
 Manual protection is applied to the relevant classification or placement context rather than automatically disabling every unrelated analysis of the file.
+
+If a module's results are explicitly cleared through DOC-205 and that module is subsequently rerun, the module must still respect any protected user decision that applies to the resulting decision context.
 
 ---
 
@@ -418,7 +420,9 @@ A resolved manual decision must not be silently replaced by later automatic proc
 
 A rejected automatic suggestion must not automatically become an accepted result merely because the same module is run again.
 
-The exact rules for reopening or re-evaluating cases belong to the relevant module and future reprocessing architecture.
+Under the current architecture, changing a module, model, threshold set or analysis implementation does not itself trigger automatic reprocessing. When the user wants a complete recalculation of a module's stored results, the user explicitly uses DOC-205 to clear that module's results and then runs the module again.
+
+Review Queue does not own or schedule reprocessing.
 
 ---
 
@@ -506,8 +510,7 @@ The current Review Queue can later support:
 * advanced filtering and search;
 * module-specific review panels;
 * richer review history;
-* automatic revalidation of stale cases;
-* integration with a future reprocessing manager.
+* automatic revalidation of stale cases.
 
 Such extensions must preserve user authority, file identity and the distinction between AI workspace expansion and FINAL structure.
 
