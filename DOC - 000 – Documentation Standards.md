@@ -6,7 +6,7 @@
 
 **Document:** DOC-000
 
-**Version:** 2.0
+**Version:** 2.1
 
 **Status:** Draft
 
@@ -406,7 +406,43 @@ Changes should not be introduced solely for stylistic reasons.
 
 ---
 
-# 22. Acceptance Criteria
+# 22. Third-Party Components and Licensing Documentation
+
+The project should minimize unnecessary use of third-party copyrighted or otherwise protected material when doing so does not materially harm the project's functionality, maintainability or safety.
+
+Third-party material may be used when its licence or another applicable legal basis clearly permits the intended use, including free use where relevant. The fact that a component is free to download or use does not by itself establish that it may be redistributed, modified or bundled with this project.
+
+This principle applies, as applicable, to:
+
+* source code and libraries;
+* Python packages;
+* machine-learning models and model weights;
+* datasets and sample data;
+* images, icons and other graphics;
+* fonts;
+* bundled runtimes and native libraries;
+* executable utilities and other external components.
+
+Before a third-party component becomes part of the project or its distributed application package, the project should record at least:
+
+```text
+component name
+source
+version
+licence / usage terms
+intended use
+redistribution requirements where applicable
+```
+
+When the licence permits use but imposes attribution, notice, redistribution or source-disclosure requirements, those obligations must be preserved in the appropriate project or distribution documentation.
+
+A component with unclear, missing or incompatible licensing terms should not be adopted merely because it is technically convenient. A functionally useful alternative with clearer permissible licensing should be preferred where practical.
+
+This section defines a documentation and governance rule. Detailed implementation packaging requirements are defined by DOC - 016.
+
+---
+
+# 23. Acceptance Criteria
 
 The documentation standard is considered satisfied when:
 
@@ -419,6 +455,7 @@ The documentation standard is considered satisfied when:
 * obsolete specifications are not presented as current requirements;
 * documentation is detailed enough to implement and maintain the system without unnecessary duplication;
 * Git history preserves previous document versions;
+* third-party components used by the project have their relevant licence information documented;
 * the number of documents remains manageable as the project grows.
 
 ---
