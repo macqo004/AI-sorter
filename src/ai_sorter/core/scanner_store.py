@@ -17,10 +17,21 @@ class ScannerStore:
         if database.connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
         self.connection = database.connection
+        self._ensure_last_seen_column()
         self.connection.execute(
             "CREATE TEMP TABLE IF NOT EXISTS scanner_seen_paths (absolute_path TEXT PRIMARY KEY)"
         )
         self.connection.commit()
+
+    def _ensure_last_seen_column(self) -> None:
+        columns = {
+            row["name"] for row in self.connection.execute("PRAGMA table_info(file_location)").fetchall()
+        }
+        if "last_seen_execution_id" not in columns:
+            self.connection.execute(
+                "ALTER TABLE file_location ADD COLUMN last_seen_execution_id INTEGER"
+            )
+            self.connection.commit()
 
     def begin_scan(self) -> None:
         self.connection.execute("DELETE FROM scanner_seen_paths")
@@ -47,23 +58,6 @@ class ScannerStore:
             last_seen_execution_id=row["last_seen_execution_id"],
         )
 
-    def mark_seen(self, absolute_path: str, execution_id: int) -> None:
-        self.connection.execute(
-            "INSERT OR IGNORE INTO scanner_seen_paths (absolute_path) VALUES (?)",
-            (absolute_path,),
-        )
-        self.connection.execute(
-            """
-            UPDATE file_location
-            SET location_status = 'ACTIVE',
-                last_seen_execution_id = ?,
-                modified_at = modified_at
-            WHERE absolute_path = ?
-            """,
-            (execution_id, absolute_path),
-        )
-        self.connection.commit()
-
     def touch_location(
         self,
         absolute_path: str,
@@ -80,7 +74,10 @@ class ScannerStore:
             """,
             (file_size, modified_at.isoformat(timespec="seconds"), execution_id, absolute_path),
         )
-        self.mark_seen(absolute_path, execution_id)
+        self.connection.execute(
+            "INSERT OR IGNORE INTO scanner_seen_paths (absolute_path) VALUES (?)",
+            (absolute_path,),
+        )
         self.connection.commit()
 
     def persist_location(self, record: FileLocationRecord, execution_id: int) -> None:
