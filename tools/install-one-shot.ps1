@@ -11,15 +11,10 @@ $RepoOwner = "macqo004"
 $RepoName = "AI-sorter"
 $PythonVersion = "3.13.15"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
-$VcRedistUrl = "https://aka.ms/vc14/vc_redist.x64.exe"
 $RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef"
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
-}
-
-function Test-Command([string]$Name) {
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
 function Download-File([string]$Url, [string]$Destination) {
@@ -28,7 +23,7 @@ function Download-File([string]$Url, [string]$Destination) {
 }
 
 try {
-    if (-not $IsWindows) {
+    if ($env:OS -ne "Windows_NT") {
         throw "This installer is intended for Windows 10/11."
     }
 
@@ -36,10 +31,7 @@ try {
     $RuntimeRoot = Join-Path $InstallRoot "runtime"
     $PythonRoot = Join-Path $RuntimeRoot "python"
     $SourceRoot = Join-Path $InstallRoot "app\source"
-    $ToolsRoot = Join-Path $InstallRoot "tools"
     $LauncherPath = Join-Path $InstallRoot "AI-Sorter.cmd"
-
-    New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 
     Write-Step "Preparing portable directories"
     foreach ($Directory in @(
@@ -54,8 +46,7 @@ try {
         (Join-Path $InstallRoot "models"),
         (Join-Path $InstallRoot "modules"),
         (Join-Path $InstallRoot "backups"),
-        (Join-Path $InstallRoot "temp"),
-        $ToolsRoot
+        (Join-Path $InstallRoot "temp")
     )) {
         New-Item -ItemType Directory -Force -Path $Directory | Out-Null
     }
@@ -127,7 +118,6 @@ if errorlevel 1 (
 )
 "@ | Set-Content -Path $LauncherPath -Encoding ASCII
 
-    Write-Step "Writing installation metadata"
     @"
 AI-Sorter portable installation
 Repository: $RepoOwner/$RepoName
@@ -143,7 +133,7 @@ InstallRoot: $InstallRoot
     Write-Host "`nInstallation complete." -ForegroundColor Green
     Write-Host "Location: $InstallRoot"
     Write-Host "Launcher: $LauncherPath"
-    Write-Host "`nNote: this bootstrap requires Internet access during installation."
+    Write-Host "`nThis bootstrap requires Internet access during installation."
 
     & $LauncherPath
 }
