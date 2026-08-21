@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from ..core.database import Database, DatabaseError
-from ..core.models import FileLocationRecord, FileRecord
+from ..core.database import Database
+from ..core.models import FileLocationRecord, FileRecord, ModuleExecutionRecord, ModuleRecord
+from ..core.scanner_store import ScannerStore
 
 SUPPORTED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
-
 ProgressCallback = Callable[["ScanProgress"], None]
 
 
@@ -56,7 +56,7 @@ class _HashedFile:
 
 
 class Scanner:
-    """Discover supported files and synchronize their filesystem identity into SQLite."""
+    """Discover supported files and synchronize filesystem identity into SQLite."""
 
     module_id = "scanner"
     module_version = "0.1.0"
@@ -67,7 +67,7 @@ class Scanner:
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
-        """Request cancellation after the currently running file operations finish."""
+        """Request cancellation after currently running file operations finish."""
         self._cancel_event.set()
 
     def scan(
@@ -81,73 +81,68 @@ class Scanner:
 
         self._cancel_event.clear()
         self.database.register_module(
-            __import__("ai_sorter.core.models", fromlist=["ModuleRecord"]).ModuleRecord(
+            ModuleRecord(
                 module_id=self.module_id,
                 display_name="Scanner",
                 module_version=self.module_version,
                 enabled=True,
             )
         )
+        store = ScannerStore(self.database)
+        store.begin_scan()
 
-        started_at = datetime.now(timezone.utc)
-        execution_id = self.database.start_module_execution(self.module_id, started_at)
-
-        discovered = 0
-        processed = 0
-        saved = 0
-        skipped = 0
-        failed = 0
-        missing = 0
+        execution_id = self.database.start_module_execution(
+            self.module_id, datetime.now(timezone.utc)
+        )
+        discovered = processed = saved = skipped = failed = missing = 0
+        cancelled = False
+        status = "FAILED"
+        workers = self.worker_count or max(1, min(16, os.cpu_count() or 4))
 
         try:
-            candidates = list(self._discover(root))
-            discovered = len(candidates)
-            self._emit(progress_callback, discovered, processed, saved, skipped, failed, discovered)
-
-            workers = self.worker_count or max(1, min(16, (os.cpu_count() or 4)))
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scanner") as executor:
-                futures: dict[Future[_HashedFile], _FileCandidate] = {}
-                for candidate in candidates:
+                pending: dict[Future[_HashedFile], _FileCandidate] = {}
+                max_pending = max(4, workers * 4)
+
+                for candidate in self._discover(root):
                     if self._cancel_event.is_set():
+                        cancelled = True
                         break
-                    if self._can_reuse_hash(candidate):
+                    discovered += 1
+
+                    if self._can_reuse_hash(store, candidate):
                         try:
-                            self.database.touch_file_location(candidate.path, candidate.size, candidate.modified_at, execution_id)
+                            store.touch_location(
+                                str(candidate.path), candidate.size, candidate.modified_at, execution_id
+                            )
                             skipped += 1
-                        except DatabaseError:
+                        except Exception:
                             failed += 1
                         processed += 1
-                        self._emit(progress_callback, discovered, processed, saved, skipped, failed, discovered, str(candidate.path))
+                        self._emit(progress_callback, discovered, processed, saved, skipped, failed, -1, str(candidate.path))
                         continue
-                    future = executor.submit(self._hash_file, candidate)
-                    futures[future] = candidate
 
-                for future in as_completed(futures):
-                    candidate = futures[future]
-                    if self._cancel_event.is_set():
-                        continue
-                    processed += 1
-                    try:
-                        result = future.result()
-                        self._persist_hashed(result, execution_id)
-                        saved += 1
-                    except Exception:
-                        failed += 1
-                    self._emit(progress_callback, discovered, processed, saved, skipped, failed, discovered, str(candidate.path))
+                    pending[executor.submit(self._hash_file, candidate)] = candidate
+                    if len(pending) >= max_pending:
+                        processed, saved, failed = self._drain_one_batch(
+                            pending, store, execution_id, processed, saved, failed, progress_callback, discovered
+                        )
 
-            if not self._cancel_event.is_set():
-                missing = self.database.mark_unseen_locations_missing(root, execution_id)
+                while pending:
+                    processed, saved, failed = self._drain_one_batch(
+                        pending, store, execution_id, processed, saved, failed, progress_callback, discovered
+                    )
 
-            cancelled = self._cancel_event.is_set()
-            status = "CANCELLED" if cancelled else ("FAILED" if failed and failed == processed else "COMPLETED")
-        except Exception:
-            cancelled = self._cancel_event.is_set()
-            status = "CANCELLED" if cancelled else "FAILED"
-            raise
+            cancelled = cancelled or self._cancel_event.is_set()
+            if not cancelled:
+                missing = store.mark_missing_under_root(root)
+            status = "CANCELLED" if cancelled else ("FAILED" if failed and saved + skipped == 0 else "COMPLETED")
         finally:
             self.database.finish_module_execution(
-                __import__("ai_sorter.core.models", fromlist=["ModuleExecutionRecord"]).ModuleExecutionRecord(
+                ModuleExecutionRecord(
                     execution_id=execution_id,
+                    module_id=self.module_id,
+                    started_at=datetime.now(timezone.utc),
                     status=status,
                     processed_count=processed,
                     success_count=saved + skipped,
@@ -155,16 +150,48 @@ class Scanner:
                 )
             )
 
-        return ScanSummary(
-            execution_id=execution_id,
-            discovered=discovered,
-            processed=processed,
-            saved=saved,
-            skipped=skipped,
-            failed=failed,
-            missing=missing,
-            cancelled=cancelled,
-        )
+        return ScanSummary(execution_id, discovered, processed, saved, skipped, failed, missing, cancelled)
+
+    def _drain_one_batch(
+        self,
+        pending: dict[Future[_HashedFile], _FileCandidate],
+        store: ScannerStore,
+        execution_id: int,
+        processed: int,
+        saved: int,
+        failed: int,
+        progress_callback: ProgressCallback | None,
+        discovered: int,
+    ) -> tuple[int, int, int]:
+        for future in as_completed(list(pending)):
+            candidate = pending.pop(future)
+            processed += 1
+            try:
+                result = future.result()
+                self.database.upsert_file(
+                    FileRecord(
+                        sha512=result.sha512,
+                        size_bytes=result.candidate.size,
+                        modified_at=result.candidate.modified_at,
+                        created_at=None,
+                        status="ACTIVE",
+                    )
+                )
+                store.persist_location(
+                    FileLocationRecord(
+                        sha512=result.sha512,
+                        absolute_path=str(result.candidate.path),
+                        file_size=result.candidate.size,
+                        modified_at=result.candidate.modified_at,
+                        location_status="ACTIVE",
+                    ),
+                    execution_id,
+                )
+                saved += 1
+            except Exception:
+                failed += 1
+            self._emit(progress_callback, discovered, processed, saved, 0, failed, -1, str(candidate.path))
+        return processed, saved, failed
 
     def _discover(self, root: Path) -> Iterable[_FileCandidate]:
         stack = [root]
@@ -181,25 +208,29 @@ class Scanner:
                                 continue
                             if not entry.is_file(follow_symlinks=False):
                                 continue
-                            path = Path(entry.path)
+                            path = Path(entry.path).resolve()
                             if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                                 continue
                             stat = entry.stat(follow_symlinks=False)
                             yield _FileCandidate(
-                                path=path.resolve(),
+                                path=path,
                                 size=stat.st_size,
-                                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).replace(microsecond=0),
                             )
                         except OSError:
                             continue
             except OSError:
                 continue
 
-    def _can_reuse_hash(self, candidate: _FileCandidate) -> bool:
-        location = self.database.get_file_location(str(candidate.path))
-        if location is None or location.location_status != "ACTIVE":
-            return False
-        return location.file_size == candidate.size and location.modified_at == candidate.modified_at
+    @staticmethod
+    def _can_reuse_hash(store: ScannerStore, candidate: _FileCandidate) -> bool:
+        location = store.get_file_location(str(candidate.path))
+        return bool(
+            location
+            and location.location_status == "ACTIVE"
+            and location.file_size == candidate.size
+            and location.modified_at == candidate.modified_at
+        )
 
     @staticmethod
     def _hash_file(candidate: _FileCandidate) -> _HashedFile:
@@ -207,28 +238,7 @@ class Scanner:
         with candidate.path.open("rb", buffering=1024 * 1024) as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
-        return _HashedFile(candidate=candidate, sha512=digest.hexdigest())
-
-    def _persist_hashed(self, result: _HashedFile, execution_id: int) -> None:
-        self.database.upsert_file(
-            FileRecord(
-                sha512=result.sha512,
-                size_bytes=result.candidate.size,
-                modified_at=result.candidate.modified_at,
-                created_at=None,
-                status="ACTIVE",
-            )
-        )
-        self.database.upsert_file_location(
-            FileLocationRecord(
-                sha512=result.sha512,
-                absolute_path=str(result.candidate.path),
-                file_size=result.candidate.size,
-                modified_at=result.candidate.modified_at,
-                location_status="ACTIVE",
-                last_seen_execution_id=execution_id,
-            )
-        )
+        return _HashedFile(candidate, digest.hexdigest())
 
     @staticmethod
     def _emit(
@@ -239,7 +249,7 @@ class Scanner:
         skipped: int,
         failed: int,
         total: int,
-        current_path: str | None = None,
+        current_path: str | None,
     ) -> None:
-        if callback is not None:
+        if callback:
             callback(ScanProgress(discovered, processed, saved, skipped, failed, total, current_path))
