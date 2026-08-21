@@ -1,1 +1,0 @@
-Installer fix note: Microsoft Visual C++ Redistributable exit code 1638 must be treated as already installed, not as a fatal error. The install script should accept 0, 1638 and 3010.
