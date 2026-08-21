@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,5 +70,7 @@ class AppPaths:
 
 
 def detect_app_root() -> Path:
-    """Return the directory containing the current source/executable."""
+    """Resolve the portable application root in source and packaged modes."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[3]
