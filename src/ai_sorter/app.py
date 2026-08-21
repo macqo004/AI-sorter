@@ -26,17 +26,14 @@ class Application:
             compute_backend = detect_compute_backend()
             self.window = MainWindow(
                 self.paths.root,
+                self.database,
                 self.database.status(),
                 compute_backend,
             )
             self.window.show()
             return self.qt_app.exec()
         except DatabaseError as exc:
-            QMessageBox.critical(
-                None,
-                "Baza danych projektu",
-                str(exc),
-            )
+            QMessageBox.critical(None, "Baza danych projektu", str(exc))
             return 1
 
     def shutdown(self) -> None:
