@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.database = database
         self.project_path = project_path
+        self.compute_backend = compute_backend
         self.scanner_thread: QThread | None = None
         self.scanner_worker: ScannerWorker | None = None
 
@@ -48,12 +49,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("AI-Sorter", central))
 
         form = QFormLayout()
-        self.database_status_label = QLabel("", central)
-        self.schema_label = QLabel("", central)
-        self.files_label = QLabel("", central)
-        self.locations_label = QLabel("", central)
-        self.modules_label = QLabel("", central)
-        self.executions_label = QLabel("", central)
+        self.database_status_label = QLabel(central)
+        self.schema_label = QLabel(central)
+        self.files_label = QLabel(central)
+        self.locations_label = QLabel(central)
+        self.modules_label = QLabel(central)
+        self.executions_label = QLabel(central)
         form.addRow("Project", QLabel(str(project_path), central))
         form.addRow("Database", QLabel(database_status.path, central))
         form.addRow("Database status", self.database_status_label)
@@ -90,14 +91,13 @@ class MainWindow(QMainWindow):
 
     def _apply_database_status(self, status: DatabaseStatus) -> None:
         self.database_status_label.setText("● Connected" if status.connected else "● Disconnected")
-        self.schema_label.setText(str(status.schema_version) if status.schema_version is not None else "—")
+        self.schema_label.setText(str(status.schema_version))
         self.files_label.setText(str(status.file_count))
         self.locations_label.setText(str(status.location_count))
         self.modules_label.setText(str(status.module_count))
         self.executions_label.setText(str(status.execution_count))
 
-    def refresh_database_status(self) -> None:
-        """Refresh counters from the current SQLite state."""
+    def _refresh_database_status(self) -> None:
         self._apply_database_status(self.database.status())
 
     def select_scan_root(self) -> None:
@@ -139,11 +139,11 @@ class MainWindow(QMainWindow):
         )
 
     def on_scan_finished(self, summary: ScanSummary) -> None:
+        self._refresh_database_status()
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
-        self.refresh_database_status()
         self.statusBar().showMessage("Scanner finished.")
         self.scan_details.setText(
             f"Scanner finished. Discovered: {summary.discovered}; "
@@ -152,11 +152,11 @@ class MainWindow(QMainWindow):
         )
 
     def on_scan_failed(self, message: str) -> None:
+        self._refresh_database_status()
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        self.refresh_database_status()
         self.statusBar().showMessage("Scanner stopped because of an error.")
         self.scan_details.setText(f"Scanner could not finish. Reason: {message}")
 
