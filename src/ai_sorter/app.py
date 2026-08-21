@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .core.compute import detect_compute_backend
-from .core.database import Database
+from .core.database import Database, DatabaseError
 from .core.paths import AppPaths
 from .gui.main_window import MainWindow
 
@@ -21,15 +21,23 @@ class Application:
 
     def start(self) -> int:
         self.paths.ensure_runtime_directories()
-        self.database.open()
-        compute_backend = detect_compute_backend()
-        self.window = MainWindow(
-            self.paths.root,
-            self.paths.database,
-            compute_backend,
-        )
-        self.window.show()
-        return self.qt_app.exec()
+        try:
+            self.database.open()
+            compute_backend = detect_compute_backend()
+            self.window = MainWindow(
+                self.paths.root,
+                self.database.status(),
+                compute_backend,
+            )
+            self.window.show()
+            return self.qt_app.exec()
+        except DatabaseError as exc:
+            QMessageBox.critical(
+                None,
+                "Baza danych projektu",
+                str(exc),
+            )
+            return 1
 
     def shutdown(self) -> None:
         self.database.close()
