@@ -13,6 +13,7 @@ $PythonVersion = "3.13.15"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 $RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef"
+$SafeRefName = ($RepoRef -replace '[^A-Za-z0-9._-]', '_')
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -21,6 +22,9 @@ function Write-Step([string]$Message) {
 function Download-File([string]$Url, [string]$Destination) {
     Write-Host "Downloading $Url" -ForegroundColor DarkGray
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+    if (-not (Test-Path $Destination)) {
+        throw "Download completed without creating the expected file: $Destination"
+    }
 }
 
 function Select-InstallRoot {
@@ -61,6 +65,7 @@ try {
     $PythonRoot = Join-Path $RuntimeRoot "python"
     $SourceRoot = Join-Path $InstallRoot "app\source"
     $LauncherPath = Join-Path $InstallRoot "AI-Sorter.cmd"
+    $InstallerLog = Join-Path $InstallRoot "installer-error.log"
 
     Write-Step "Preparing portable directories"
     foreach ($Directory in @(
@@ -81,7 +86,7 @@ try {
     }
 
     Write-Step "Downloading application source"
-    $RepoZip = Join-Path $env:TEMP "AI-Sorter-$RepoRef.zip"
+    $RepoZip = Join-Path $env:TEMP "AI-Sorter-$SafeRefName.zip"
     Download-File -Url $RepoZipUrl -Destination $RepoZip
 
     $ExtractRoot = Join-Path $env:TEMP "AI-Sorter-install-$([guid]::NewGuid().ToString('N'))"
@@ -177,8 +182,31 @@ InstallRoot: $InstallRoot
     Start-Process -FilePath $LauncherPath
 }
 catch {
+    $Message = $_.Exception.Message
+    try {
+        if ($InstallRoot) {
+            @"
+AI-Sorter installer failure
+Time: $(Get-Date -Format s)
+Repository: $RepoOwner/$RepoName
+Revision: $RepoRef
+Error: $Message
+
+Technical details:
+$($_ | Out-String)
+"@ | Set-Content -Path $InstallerLog -Encoding UTF8
+        }
+    }
+    catch {
+        # Preserve the original error if logging itself fails.
+    }
+
     Write-Host "`nINSTALLATION FAILED" -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    Write-Host "`nNo image collection files are modified by this installer."
+    Write-Host $Message -ForegroundColor Red
+    if ($InstallRoot) {
+        Write-Host "`nInstaller log: $InstallerLog" -ForegroundColor Yellow
+    }
+    Write-Host "`nNo image collection files are modified by this installer." -ForegroundColor Yellow
+    Read-Host "Press ENTER to close"
     exit 1
 }
