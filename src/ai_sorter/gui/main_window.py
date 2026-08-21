@@ -6,11 +6,18 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QLabel, QMainWindow, QStatusBar, QVBoxLayout, QWidget
 
+from ..core.compute import ComputeBackend
+
 
 class MainWindow(QMainWindow):
     """Minimal foundation window used by the first implementation milestone."""
 
-    def __init__(self, project_path: Path, database_path: Path) -> None:
+    def __init__(
+        self,
+        project_path: Path,
+        database_path: Path,
+        compute_backend: ComputeBackend,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("AI-Sorter")
         self.resize(900, 600)
@@ -20,6 +27,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("AI-Sorter", central))
         layout.addWidget(QLabel(f"Project: {project_path}", central))
         layout.addWidget(QLabel(f"Database: {database_path}", central))
+        layout.addWidget(QLabel(f"Compute backend: {compute_backend.display_name}", central))
         self.setCentralWidget(central)
 
         status = QStatusBar(self)
