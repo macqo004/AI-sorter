@@ -91,9 +91,8 @@ class Scanner:
         store = ScannerStore(self.database)
         store.begin_scan()
 
-        execution_id = self.database.start_module_execution(
-            self.module_id, datetime.now(timezone.utc)
-        )
+        started_at = datetime.now(timezone.utc)
+        execution_id = self.database.start_module_execution(self.module_id, started_at)
         discovered = processed = saved = skipped = failed = missing = 0
         cancelled = False
         status = "FAILED"
@@ -112,9 +111,7 @@ class Scanner:
 
                     if self._can_reuse_hash(store, candidate):
                         try:
-                            store.touch_location(
-                                str(candidate.path), candidate.size, candidate.modified_at, execution_id
-                            )
+                            store.touch_location(str(candidate.path), candidate.size, candidate.modified_at, execution_id)
                             skipped += 1
                         except Exception:
                             failed += 1
@@ -125,12 +122,12 @@ class Scanner:
                     pending[executor.submit(self._hash_file, candidate)] = candidate
                     if len(pending) >= max_pending:
                         processed, saved, failed = self._drain_one_batch(
-                            pending, store, execution_id, processed, saved, failed, progress_callback, discovered
+                            pending, store, execution_id, processed, saved, skipped, failed, progress_callback, discovered
                         )
 
                 while pending:
                     processed, saved, failed = self._drain_one_batch(
-                        pending, store, execution_id, processed, saved, failed, progress_callback, discovered
+                        pending, store, execution_id, processed, saved, skipped, failed, progress_callback, discovered
                     )
 
             cancelled = cancelled or self._cancel_event.is_set()
@@ -142,7 +139,7 @@ class Scanner:
                 ModuleExecutionRecord(
                     execution_id=execution_id,
                     module_id=self.module_id,
-                    started_at=datetime.now(timezone.utc),
+                    started_at=started_at,
                     status=status,
                     processed_count=processed,
                     success_count=saved + skipped,
@@ -159,6 +156,7 @@ class Scanner:
         execution_id: int,
         processed: int,
         saved: int,
+        skipped: int,
         failed: int,
         progress_callback: ProgressCallback | None,
         discovered: int,
@@ -190,7 +188,7 @@ class Scanner:
                 saved += 1
             except Exception:
                 failed += 1
-            self._emit(progress_callback, discovered, processed, saved, 0, failed, -1, str(candidate.path))
+            self._emit(progress_callback, discovered, processed, saved, skipped, failed, -1, str(candidate.path))
         return processed, saved, failed
 
     def _discover(self, root: Path) -> Iterable[_FileCandidate]:
