@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# Runtime/generated directories
+app/
+config/
+data/
+logs/
+cache/
+models/
+modules/
+backups/
+temp/
+build/
+dist/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
