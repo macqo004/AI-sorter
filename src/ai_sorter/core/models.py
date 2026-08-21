@@ -1,4 +1,4 @@
-"""Small immutable models shared by the database access layer."""
+"""Small immutable models shared by the application and database layer."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class FileLocationRecord:
     file_size: int | None = None
     modified_at: datetime | None = None
     location_status: str = "ACTIVE"
+    last_seen_execution_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
