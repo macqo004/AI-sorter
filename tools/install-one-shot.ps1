@@ -109,8 +109,11 @@ try {
     $VcInstaller = Join-Path $env:TEMP "vc_redist.x64.exe"
     Download-File -Url $VcRedistUrl -Destination $VcInstaller
     $VcProcess = Start-Process -FilePath $VcInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
-    if ($VcProcess.ExitCode -notin @(0, 3010)) {
+    if ($VcProcess.ExitCode -notin @(0, 1638, 3010)) {
         throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
+    }
+    if ($VcProcess.ExitCode -eq 1638) {
+        Write-Host "Microsoft Visual C++ Runtime is already installed. Continuing." -ForegroundColor Green
     }
 
     Write-Step "Installing Python $PythonVersion locally"
