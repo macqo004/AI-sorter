@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$InstallRoot = "$env:USERPROFILE\AI-Sorter",
+    [string]$InstallRoot,
     [string]$RepoRef = "feature/application-foundation"
 )
 
@@ -11,6 +11,7 @@ $RepoOwner = "macqo004"
 $RepoName = "AI-sorter"
 $PythonVersion = "3.13.15"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
+$VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 $RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef"
 
 function Write-Step([string]$Message) {
@@ -22,9 +23,37 @@ function Download-File([string]$Url, [string]$Destination) {
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
 }
 
+function Select-InstallRoot {
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = "Choose the folder where AI-Sorter will be installed."
+    $dialog.ShowNewFolderButton = $true
+    $dialog.SelectedPath = Join-Path $env:USERPROFILE "AI-Sorter"
+    $result = $dialog.ShowDialog()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        throw "Installation was cancelled because no destination folder was selected."
+    }
+    return $dialog.SelectedPath
+}
+
 try {
     if ($env:OS -ne "Windows_NT") {
         throw "This installer is intended for Windows 10/11."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+        Write-Step "Choose installation location"
+        try {
+            $InstallRoot = Select-InstallRoot
+        }
+        catch {
+            Write-Host "Folder selection is unavailable. Enter the installation path manually." -ForegroundColor Yellow
+            $InstallRoot = Read-Host "Installation path"
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+        throw "No installation location was provided."
     }
 
     $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
@@ -71,6 +100,14 @@ try {
     Copy-Item -Path (Join-Path $ExtractedRepo.FullName "src") -Destination $SourceRoot -Recurse -Force
     Copy-Item -Path (Join-Path $ExtractedRepo.FullName "pyproject.toml") -Destination $SourceRoot -Force
 
+    Write-Step "Installing Microsoft Visual C++ runtime if required"
+    $VcInstaller = Join-Path $env:TEMP "vc_redist.x64.exe"
+    Download-File -Url $VcRedistUrl -Destination $VcInstaller
+    $VcProcess = Start-Process -FilePath $VcInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
+    if ($VcProcess.ExitCode -notin @(0, 3010)) {
+        throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
+    }
+
     Write-Step "Installing Python $PythonVersion locally"
     $PythonInstaller = Join-Path $env:TEMP "python-$PythonVersion-amd64.exe"
     Download-File -Url $PythonInstallerUrl -Destination $PythonInstaller
@@ -99,15 +136,16 @@ try {
     }
 
     Write-Step "Installing Python dependencies"
-    & $PythonExe -m pip install --disable-pip-version-check --upgrade pip
-    if ($LASTEXITCODE -ne 0) { throw "pip installation failed." }
+    & $PythonExe -m pip install --disable-pip-version-check --upgrade pip setuptools
+    if ($LASTEXITCODE -ne 0) { throw "pip/setuptools installation failed." }
 
-    & $PythonExe -m pip install --disable-pip-version-check (Join-Path $SourceRoot "")
+    & $PythonExe -m pip install --disable-pip-version-check $SourceRoot
     if ($LASTEXITCODE -ne 0) { throw "AI-Sorter package installation failed." }
 
     Write-Step "Creating launcher"
     @"
 @echo off
+setlocal
 set "AI_SORTER_HOME=$InstallRoot"
 set "PYTHONPATH=$SourceRoot\src"
 "$PythonExe" -m ai_sorter
@@ -116,6 +154,7 @@ if errorlevel 1 (
     echo AI-Sorter could not start. Check the logs directory for technical details.
     pause
 )
+endlocal
 "@ | Set-Content -Path $LauncherPath -Encoding ASCII
 
     @"
@@ -135,7 +174,7 @@ InstallRoot: $InstallRoot
     Write-Host "Launcher: $LauncherPath"
     Write-Host "`nThis bootstrap requires Internet access during installation."
 
-    & $LauncherPath
+    Start-Process -FilePath $LauncherPath
 }
 catch {
     Write-Host "`nINSTALLATION FAILED" -ForegroundColor Red
