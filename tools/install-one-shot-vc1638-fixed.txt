@@ -1,0 +1,1 @@
+This placeholder is intentionally not part of the installer. The actual fix is applied directly to tools/install-one-shot.ps1: VC++ Redistributable exit code 1638 is accepted as 'already installed'.
