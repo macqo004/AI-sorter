@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication
 
+from .core.compute import detect_compute_backend
 from .core.database import Database
 from .core.paths import AppPaths
 from .gui.main_window import MainWindow
@@ -21,7 +22,12 @@ class Application:
     def start(self) -> int:
         self.paths.ensure_runtime_directories()
         self.database.open()
-        self.window = MainWindow(self.paths.root, self.paths.database)
+        compute_backend = detect_compute_backend()
+        self.window = MainWindow(
+            self.paths.root,
+            self.paths.database,
+            compute_backend,
+        )
         self.window.show()
         return self.qt_app.exec()
 
