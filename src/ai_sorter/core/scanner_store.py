@@ -12,6 +12,8 @@ from .models import FileLocationRecord, FileRecord
 class ScannerStore:
     """Thin persistence adapter for Scanner-specific synchronization state."""
 
+    LOOKUP_BATCH_SIZE = 500
+
     def __init__(self, database: Database) -> None:
         self.database = database
         if database.connection is None:
@@ -38,26 +40,40 @@ class ScannerStore:
         self.connection.execute("DELETE FROM scanner_seen_paths")
         self.connection.commit()
 
-    def get_file_location(self, absolute_path: str) -> FileLocationRecord | None:
-        row = self.connection.execute(
-            """
-            SELECT sha512, absolute_path, file_size, modified_at, location_status,
-                   last_seen_execution_id
-            FROM file_location
-            WHERE absolute_path = ?
-            """,
-            (absolute_path,),
-        ).fetchone()
-        if row is None:
-            return None
-        return FileLocationRecord(
-            sha512=row["sha512"],
-            absolute_path=row["absolute_path"],
-            file_size=row["file_size"],
-            modified_at=self._parse_datetime(row["modified_at"]),
-            location_status=row["location_status"],
-            last_seen_execution_id=row["last_seen_execution_id"],
-        )
+    def lookup_locations(self, absolute_paths: list[str]) -> dict[str, FileLocationRecord]:
+        """Return known locations using bounded IN queries instead of one query per file."""
+        if not absolute_paths:
+            return {}
+
+        result: dict[str, FileLocationRecord] = {}
+        unique_paths = list(dict.fromkeys(absolute_paths))
+        try:
+            for offset in range(0, len(unique_paths), self.LOOKUP_BATCH_SIZE):
+                batch = unique_paths[offset : offset + self.LOOKUP_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                rows = self.connection.execute(
+                    f"""
+                    SELECT sha512, absolute_path, file_size, modified_at, location_status,
+                           last_seen_execution_id
+                    FROM file_location
+                    WHERE absolute_path IN ({placeholders})
+                    """,
+                    batch,
+                ).fetchall()
+                for row in rows:
+                    result[row["absolute_path"]] = FileLocationRecord(
+                        sha512=row["sha512"],
+                        absolute_path=row["absolute_path"],
+                        file_size=row["file_size"],
+                        modified_at=self._parse_datetime(row["modified_at"]),
+                        location_status=row["location_status"],
+                        last_seen_execution_id=row["last_seen_execution_id"],
+                    )
+        except Exception as exc:
+            raise DatabaseError(
+                "Nie udało się sprawdzić istniejących lokalizacji plików w bazie danych."
+            ) from exc
+        return result
 
     def touch_batch(
         self,
@@ -78,12 +94,7 @@ class ScannerStore:
                     WHERE absolute_path = ?
                     """,
                     [
-                        (
-                            size,
-                            modified_at.isoformat(timespec="seconds"),
-                            execution_id,
-                            path,
-                        )
+                        (size, modified_at.isoformat(timespec="seconds"), execution_id, path)
                         for path, size, modified_at in items
                     ],
                 )
