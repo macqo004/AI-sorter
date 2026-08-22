@@ -62,10 +62,10 @@ class _HashedFile:
 
 
 class Scanner:
-    """Discover supported files and synchronize filesystem identity into SQLite."""
+    """Discover supported files and synchronize their filesystem identity into SQLite."""
 
     module_id = "scanner"
-    module_version = "0.2.0"
+    module_version = "0.3.0"
 
     def __init__(
         self,
@@ -73,11 +73,13 @@ class Scanner:
         worker_count: int = 0,
         db_batch_size: int = 1000,
         queue_multiplier: int = 8,
+        lookup_batch_size: int = 500,
     ) -> None:
         self.database = database
         self.worker_count = max(0, worker_count)
         self.db_batch_size = max(100, db_batch_size)
         self.queue_multiplier = max(2, queue_multiplier)
+        self.lookup_batch_size = max(100, min(500, lookup_batch_size))
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -138,7 +140,7 @@ class Scanner:
                 touch_batch.clear()
 
         def persist_completed(done: set[Future[_HashedFile]]) -> None:
-            nonlocal processed, saved, failed, hash_seconds, database_seconds
+            nonlocal processed, saved, failed, hash_seconds
             for future in done:
                 candidate = pending.pop(future)
                 processed += 1
@@ -170,32 +172,60 @@ class Scanner:
                     failed += 1
                     self._emit(progress_callback, discovered, processed, saved, skipped, failed, -1, str(candidate.path))
 
+        def process_candidate_batch(candidates: list[_FileCandidate]) -> None:
+            nonlocal processed, skipped, failed, database_seconds
+            if not candidates:
+                return
+
+            lookup_start = time.perf_counter()
+            known = store.lookup_locations([str(candidate.path) for candidate in candidates])
+            database_seconds += time.perf_counter() - lookup_start
+
+            for candidate in candidates:
+                if self._can_reuse_hash(known.get(str(candidate.path)), candidate):
+                    touch_batch.append((str(candidate.path), candidate.size, candidate.modified_at))
+                    skipped += 1
+                    processed += 1
+                    if len(touch_batch) >= self.db_batch_size:
+                        flush_batches()
+                    self._emit(
+                        progress_callback,
+                        discovered,
+                        processed,
+                        saved,
+                        skipped,
+                        failed,
+                        -1,
+                        str(candidate.path),
+                    )
+                    continue
+
+                while len(pending) >= max_pending and not self._cancel_event.is_set():
+                    done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    persist_completed(done)
+                    if len(save_batch_files) >= self.db_batch_size:
+                        flush_batches()
+
+                if self._cancel_event.is_set():
+                    return
+                pending[self._executor.submit(self._hash_file, candidate)] = candidate
+
         try:
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scanner") as executor:
+                self._executor = executor
+                candidate_batch: list[_FileCandidate] = []
                 for candidate in self._discover(root):
                     discovered += 1
+                    candidate_batch.append(candidate)
+                    if len(candidate_batch) >= self.lookup_batch_size:
+                        process_candidate_batch(candidate_batch)
+                        candidate_batch.clear()
                     if self._cancel_event.is_set():
                         cancelled = True
                         break
 
-                    if self._can_reuse_hash(store, candidate):
-                        touch_batch.append((str(candidate.path), candidate.size, candidate.modified_at))
-                        skipped += 1
-                        processed += 1
-                        if len(touch_batch) >= self.db_batch_size:
-                            flush_batches()
-                        self._emit(progress_callback, discovered, processed, saved, skipped, failed, -1, str(candidate.path))
-                    else:
-                        while len(pending) >= max_pending and not self._cancel_event.is_set():
-                            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-                            persist_completed(done)
-                            if len(save_batch_files) >= self.db_batch_size:
-                                flush_batches()
-
-                        if self._cancel_event.is_set():
-                            cancelled = True
-                            break
-                        pending[executor.submit(self._hash_file, candidate)] = candidate
+                if not self._cancel_event.is_set():
+                    process_candidate_batch(candidate_batch)
 
                 discovery_seconds = time.perf_counter() - discovery_start
 
@@ -272,8 +302,10 @@ class Scanner:
                 continue
 
     @staticmethod
-    def _can_reuse_hash(store: ScannerStore, candidate: _FileCandidate) -> bool:
-        location = store.get_file_location(str(candidate.path))
+    def _can_reuse_hash(
+        location: FileLocationRecord | None,
+        candidate: _FileCandidate,
+    ) -> bool:
         return bool(
             location
             and location.location_status == "ACTIVE"
