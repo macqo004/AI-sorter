@@ -28,6 +28,8 @@ class AllDupInspection:
     path: Path
     file_size_bytes: int
     sqlite_version: str
+    wal_present: bool
+    shm_present: bool
     tables: tuple[AllDupTable, ...]
     hash_candidates: tuple[tuple[str, str, str], ...]
     path_candidates: tuple[tuple[str, str, str], ...]
@@ -40,6 +42,8 @@ class AllDupInspection:
             f"Path: {self.path}",
             f"Database size: {self.file_size_bytes:,} bytes",
             f"SQLite: {self.sqlite_version}",
+            f"WAL sidecar: {'present' if self.wal_present else 'not found'}",
+            f"SHM sidecar: {'present' if self.shm_present else 'not found'}",
             f"Tables: {len(self.tables)}",
             "",
         ]
@@ -90,6 +94,8 @@ class AllDupDatabaseInspector:
         if not self._looks_like_sqlite(database_path):
             raise ValueError(f"Plik nie wygląda na poprawną bazę SQLite: {database_path}")
 
+        wal_present = database_path.with_name(database_path.name + "-wal").exists()
+        shm_present = database_path.with_name(database_path.name + "-shm").exists()
         uri = f"file:{database_path.as_posix()}?mode=ro"
         try:
             connection = sqlite3.connect(uri, uri=True, timeout=10)
@@ -127,15 +133,29 @@ class AllDupDatabaseInspector:
             finally:
                 connection.close()
         except sqlite3.Error as exc:
+            sidecars = []
+            if wal_present:
+                sidecars.append("-wal")
+            if shm_present:
+                sidecars.append("-shm")
+            sidecar_text = ", ".join(sidecars) if sidecars else "none"
+            hint = (
+                " Zamknij całkowicie AllDup i spróbuj ponownie. "
+                "Jeżeli obok bazy istnieją pliki -wal/-shm, muszą pozostać razem z bazą."
+            )
             raise RuntimeError(
                 "Nie udało się odczytać bazy AllDup w trybie tylko do odczytu. "
-                "Baza nie została zmieniona."
+                f"SQLite zgłosił: {exc}. Wykryte pliki towarzyszące: {sidecar_text}."
+                + hint
+                + " Baza nie została zmieniona."
             ) from exc
 
         return AllDupInspection(
             path=database_path,
             file_size_bytes=database_path.stat().st_size,
             sqlite_version=sqlite_version,
+            wal_present=wal_present,
+            shm_present=shm_present,
             tables=tuple(tables),
             hash_candidates=tuple(hash_candidates),
             path_candidates=tuple(path_candidates),
