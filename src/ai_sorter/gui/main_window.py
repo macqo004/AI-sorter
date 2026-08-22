@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.alldup_inspector import AllDupDatabaseInspector
 from ..core.compute import ComputeBackend
 from ..core.database import Database
 from ..core.models import DatabaseStatus
@@ -51,7 +52,7 @@ class MainWindow(QMainWindow):
         self.elapsed_timer.timeout.connect(self._refresh_live_elapsed)
 
         self.setWindowTitle("AI-Sorter")
-        self.resize(920, 700)
+        self.resize(920, 760)
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
@@ -84,6 +85,10 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_scan)
         layout.addWidget(self.cancel_button)
 
+        self.alldup_button = QPushButton("Inspect AllDup database…", central)
+        self.alldup_button.clicked.connect(self.inspect_alldup_database)
+        layout.addWidget(self.alldup_button)
+
         self.progress = QProgressBar(central)
         self.progress.setRange(0, 0)
         layout.addWidget(self.progress)
@@ -114,12 +119,32 @@ class MainWindow(QMainWindow):
         if root:
             self.start_scan(Path(root))
 
+    def inspect_alldup_database(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose AllDup database",
+            str(Path.home() / "AppData" / "Roaming" / "AllDup" / "db"),
+            "SQLite database (*.adb *.db);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            inspection = AllDupDatabaseInspector().inspect(Path(path), count_rows=False)
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle("AllDup database inspection")
+            dialog.setText("Baza została odczytana w trybie tylko do odczytu.")
+            dialog.setDetailedText(inspection.format_text())
+            dialog.exec()
+        except Exception as exc:
+            QMessageBox.critical(self, "AllDup database inspection", str(exc))
+
     def start_scan(self, root: Path) -> None:
         self.close_after_scan = False
         self.scan_started_at = time.perf_counter()
         self._last_scan_progress = None
         self.scan_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self.alldup_button.setEnabled(False)
         self.progress.setRange(0, 0)
         self.scan_details.setText(f"Scanning: {root}\nElapsed: 00:00:00")
         self.statusBar().showMessage("Scanner is running…")
@@ -201,6 +226,7 @@ class MainWindow(QMainWindow):
         self._refresh_database_status()
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.alldup_button.setEnabled(True)
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self.scan_started_at = None
@@ -218,6 +244,7 @@ class MainWindow(QMainWindow):
         self._refresh_database_status()
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.alldup_button.setEnabled(True)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.scan_started_at = None
