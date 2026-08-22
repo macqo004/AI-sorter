@@ -27,6 +27,8 @@ class ScannerTests(unittest.TestCase):
                 summary = Scanner(db, worker_count=2).scan(root)
                 self.assertEqual(summary.failed, 0)
                 self.assertEqual(summary.discovered, 2)
+                self.assertEqual(summary.scanned, 2)
+                self.assertEqual(summary.skipped, 0)
                 status = db.status()
                 self.assertEqual(status.file_count, 1)
                 self.assertEqual(status.location_count, 2)
@@ -44,7 +46,9 @@ class ScannerTests(unittest.TestCase):
                 first = Scanner(db).scan(root)
                 second = Scanner(db).scan(root)
                 self.assertEqual(first.saved, 1)
+                self.assertEqual(first.scanned, 1)
                 self.assertEqual(second.saved, 0)
+                self.assertEqual(second.scanned, 0)
                 self.assertEqual(second.skipped, 1)
             finally:
                 db.close()
@@ -61,6 +65,26 @@ class ScannerTests(unittest.TestCase):
                 file_path.unlink()
                 summary = Scanner(db).scan(root)
                 self.assertEqual(summary.missing, 1)
+            finally:
+                db.close()
+
+    def test_discovery_order_is_alphabetical(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ["S.jpg", "C.jpg", "6.jpg", "M.jpg", "A.jpg"]:
+                (root / name).write_bytes(name.encode("ascii"))
+
+            db = Database(root / "project.db")
+            db.open()
+            try:
+                discovered_paths: list[str] = []
+                scanner = Scanner(db, worker_count=1)
+                scanner.scan(root, lambda progress: discovered_paths.append(progress.current_discovery_path or ""))
+                seen = [path for path in discovered_paths if path.endswith(("6.jpg", "A.jpg", "C.jpg", "M.jpg", "S.jpg"))]
+                self.assertEqual(
+                    [Path(path).name for path in seen[-5:]],
+                    ["6.jpg", "A.jpg", "C.jpg", "M.jpg", "S.jpg"],
+                )
             finally:
                 db.close()
 
