@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtWidgets import (
     QFormLayout,
     QFileDialog,
@@ -44,6 +44,11 @@ class MainWindow(QMainWindow):
         self.scanner_worker: ScannerWorker | None = None
         self.scan_started_at: float | None = None
         self.close_after_scan = False
+        self._last_scan_progress: ScanProgress | None = None
+
+        self.elapsed_timer = QTimer(self)
+        self.elapsed_timer.setInterval(1000)
+        self.elapsed_timer.timeout.connect(self._refresh_live_elapsed)
 
         self.setWindowTitle("AI-Sorter")
         self.resize(920, 700)
@@ -112,11 +117,13 @@ class MainWindow(QMainWindow):
     def start_scan(self, root: Path) -> None:
         self.close_after_scan = False
         self.scan_started_at = time.perf_counter()
+        self._last_scan_progress = None
         self.scan_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self.scan_details.setText(f"Scanning: {root}\nElapsed: 00:00:00")
         self.statusBar().showMessage("Scanner is running…")
+        self.elapsed_timer.start()
 
         scanner = Scanner(self.database)
         self.scanner_thread = QThread(self)
@@ -137,7 +144,16 @@ class MainWindow(QMainWindow):
             self.cancel_button.setEnabled(False)
             self.statusBar().showMessage("Cancelling scanner…")
 
+    def _refresh_live_elapsed(self) -> None:
+        if not self.scan_started_at or not self._last_scan_progress:
+            return
+        self._render_scan_progress(self._last_scan_progress)
+
     def on_scan_progress(self, progress: ScanProgress) -> None:
+        self._last_scan_progress = progress
+        self._render_scan_progress(progress)
+
+    def _render_scan_progress(self, progress: ScanProgress) -> None:
         elapsed = time.perf_counter() - self.scan_started_at if self.scan_started_at else 0.0
         scanned_rate = progress.scanned / elapsed if elapsed > 0 else 0.0
         skipped_rate = progress.skipped / elapsed if elapsed > 0 else 0.0
@@ -181,12 +197,14 @@ class MainWindow(QMainWindow):
         )
 
     def on_scan_finished(self, summary: ScanSummary) -> None:
+        self.elapsed_timer.stop()
         self._refresh_database_status()
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self.scan_started_at = None
+        self._last_scan_progress = None
         title = "Scanner finished." if not summary.cancelled else "Scanner cancelled safely."
         self.statusBar().showMessage(title)
         summary_text = self._format_scan_summary(summary, title)
@@ -196,12 +214,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Scanner summary", summary_text)
 
     def on_scan_failed(self, message: str) -> None:
+        self.elapsed_timer.stop()
         self._refresh_database_status()
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.scan_started_at = None
+        self._last_scan_progress = None
         self.statusBar().showMessage("Scanner stopped because of an error.")
         self.scan_details.setText(f"Scanner could not finish. Reason: {message}")
 
@@ -231,4 +251,5 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Cancelling scanner… Please wait for the final summary.")
             event.ignore()
             return
+        self.elapsed_timer.stop()
         event.accept()
