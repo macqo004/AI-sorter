@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
         self.close_after_scan = False
 
         self.setWindowTitle("AI-Sorter")
-        self.resize(920, 650)
+        self.resize(920, 700)
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         self.scan_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
-        self.scan_details.setText(f"Scanning: {root}\nElapsed: 0s")
+        self.scan_details.setText(f"Scanning: {root}\nElapsed: 00:00:00")
         self.statusBar().showMessage("Scanner is running…")
 
         scanner = Scanner(self.database)
@@ -138,31 +138,46 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Cancelling scanner…")
 
     def on_scan_progress(self, progress: ScanProgress) -> None:
-        elapsed = int(time.perf_counter() - self.scan_started_at) if self.scan_started_at else 0
-        rate = progress.processed / elapsed if elapsed > 0 else 0.0
+        elapsed = time.perf_counter() - self.scan_started_at if self.scan_started_at else 0.0
+        scanned_rate = progress.scanned / elapsed if elapsed > 0 else 0.0
+        skipped_rate = progress.skipped / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
             f"Discovered: {progress.discovered}\n"
             f"Processed: {progress.processed}\n"
-            f"Saved: {progress.saved} | Skipped: {progress.skipped} | Errors: {progress.failed}\n"
-            f"Elapsed: {elapsed}s | Rate: {rate:.1f} files/s\n"
-            f"Current: {progress.current_path or '—'}"
+            f"Scanned: {progress.scanned} | Skipped: {progress.skipped} | Errors: {progress.failed}\n"
+            f"Scanned rate: {scanned_rate:.1f} files/s | Skipped rate: {skipped_rate:.1f} files/s\n"
+            f"Elapsed: {self._format_duration(elapsed)}\n"
+            f"Discovery: {progress.current_discovery_path or '—'}\n"
+            f"Last completed: {progress.last_completed_path or '—'}"
         )
 
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total_seconds = max(0, int(seconds))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
     def _format_scan_summary(self, summary: ScanSummary, title: str) -> str:
-        average = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        scanned_rate = summary.scanned / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        skipped_rate = summary.skipped / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        processed_rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
         return (
             f"{title}\n\n"
             f"Discovered: {summary.discovered}\n"
             f"Processed: {summary.processed}\n"
+            f"Scanned: {summary.scanned}\n"
             f"Saved: {summary.saved}\n"
             f"Skipped: {summary.skipped}\n"
             f"Errors: {summary.failed}\n"
             f"Missing: {summary.missing}\n\n"
-            f"Total time: {summary.elapsed_seconds:.1f}s\n"
-            f"Discovery: {summary.discovery_seconds:.1f}s\n"
-            f"Hashing (worker time): {summary.hash_seconds:.1f}s\n"
-            f"Database: {summary.database_seconds:.1f}s\n"
-            f"Average: {average:.1f} files/s"
+            f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
+            f"Discovery: {self._format_duration(summary.discovery_seconds)}\n"
+            f"Hashing (worker time): {self._format_duration(summary.hash_seconds)}\n"
+            f"Database: {self._format_duration(summary.database_seconds)}\n\n"
+            f"Scanned rate: {scanned_rate:.1f} files/s\n"
+            f"Skipped rate: {skipped_rate:.1f} files/s\n"
+            f"Processed rate: {processed_rate:.1f} files/s"
         )
 
     def on_scan_finished(self, summary: ScanSummary) -> None:
@@ -172,12 +187,13 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self.scan_started_at = None
-        self.statusBar().showMessage("Scanner finished." if not summary.cancelled else "Scanner cancelled safely.")
         title = "Scanner finished." if not summary.cancelled else "Scanner cancelled safely."
-        self.scan_details.setText(self._format_scan_summary(summary, title))
+        self.statusBar().showMessage(title)
+        summary_text = self._format_scan_summary(summary, title)
+        self.scan_details.setText(summary_text)
         if self.close_after_scan:
             self.close_after_scan = False
-            QMessageBox.information(self, "Scanner summary", self._format_scan_summary(summary, title))
+            QMessageBox.information(self, "Scanner summary", summary_text)
 
     def on_scan_failed(self, message: str) -> None:
         self._refresh_database_status()
