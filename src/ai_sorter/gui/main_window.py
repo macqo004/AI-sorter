@@ -148,7 +148,11 @@ class MainWindow(QMainWindow):
         self.scan_details.setText(
             f"Scanner finished. Discovered: {summary.discovered}; "
             f"saved: {summary.saved}; skipped: {summary.skipped}; "
-            f"errors: {summary.failed}; missing: {summary.missing}."
+            f"errors: {summary.failed}; missing: {summary.missing}.\n"
+            f"Time: {summary.elapsed_seconds:.1f}s | "
+            f"Discovery: {summary.discovery_seconds:.1f}s | "
+            f"Hashing (worker time): {summary.hash_seconds:.1f}s | "
+            f"Database: {summary.database_seconds:.1f}s"
         )
 
     def on_scan_failed(self, message: str) -> None:
