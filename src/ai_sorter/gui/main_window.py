@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QStatusBar,
@@ -40,6 +42,8 @@ class MainWindow(QMainWindow):
         self.compute_backend = compute_backend
         self.scanner_thread: QThread | None = None
         self.scanner_worker: ScannerWorker | None = None
+        self.scan_started_at: float | None = None
+        self.close_after_scan = False
 
         self.setWindowTitle("AI-Sorter")
         self.resize(920, 650)
@@ -106,10 +110,12 @@ class MainWindow(QMainWindow):
             self.start_scan(Path(root))
 
     def start_scan(self, root: Path) -> None:
+        self.close_after_scan = False
+        self.scan_started_at = time.perf_counter()
         self.scan_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
-        self.scan_details.setText(f"Scanning: {root}")
+        self.scan_details.setText(f"Scanning: {root}\nElapsed: 0s")
         self.statusBar().showMessage("Scanner is running…")
 
         scanner = Scanner(self.database)
@@ -128,14 +134,35 @@ class MainWindow(QMainWindow):
     def cancel_scan(self) -> None:
         if self.scanner_worker:
             self.scanner_worker.cancel()
+            self.cancel_button.setEnabled(False)
             self.statusBar().showMessage("Cancelling scanner…")
 
     def on_scan_progress(self, progress: ScanProgress) -> None:
+        elapsed = int(time.perf_counter() - self.scan_started_at) if self.scan_started_at else 0
+        rate = progress.processed / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
             f"Discovered: {progress.discovered}\n"
             f"Processed: {progress.processed}\n"
             f"Saved: {progress.saved} | Skipped: {progress.skipped} | Errors: {progress.failed}\n"
+            f"Elapsed: {elapsed}s | Rate: {rate:.1f} files/s\n"
             f"Current: {progress.current_path or '—'}"
+        )
+
+    def _format_scan_summary(self, summary: ScanSummary, title: str) -> str:
+        average = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        return (
+            f"{title}\n\n"
+            f"Discovered: {summary.discovered}\n"
+            f"Processed: {summary.processed}\n"
+            f"Saved: {summary.saved}\n"
+            f"Skipped: {summary.skipped}\n"
+            f"Errors: {summary.failed}\n"
+            f"Missing: {summary.missing}\n\n"
+            f"Total time: {summary.elapsed_seconds:.1f}s\n"
+            f"Discovery: {summary.discovery_seconds:.1f}s\n"
+            f"Hashing (worker time): {summary.hash_seconds:.1f}s\n"
+            f"Database: {summary.database_seconds:.1f}s\n"
+            f"Average: {average:.1f} files/s"
         )
 
     def on_scan_finished(self, summary: ScanSummary) -> None:
@@ -144,16 +171,13 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
-        self.statusBar().showMessage("Scanner finished.")
-        self.scan_details.setText(
-            f"Scanner finished. Discovered: {summary.discovered}; "
-            f"saved: {summary.saved}; skipped: {summary.skipped}; "
-            f"errors: {summary.failed}; missing: {summary.missing}.\n"
-            f"Time: {summary.elapsed_seconds:.1f}s | "
-            f"Discovery: {summary.discovery_seconds:.1f}s | "
-            f"Hashing (worker time): {summary.hash_seconds:.1f}s | "
-            f"Database: {summary.database_seconds:.1f}s"
-        )
+        self.scan_started_at = None
+        self.statusBar().showMessage("Scanner finished." if not summary.cancelled else "Scanner cancelled safely.")
+        title = "Scanner finished." if not summary.cancelled else "Scanner cancelled safely."
+        self.scan_details.setText(self._format_scan_summary(summary, title))
+        if self.close_after_scan:
+            self.close_after_scan = False
+            QMessageBox.information(self, "Scanner summary", self._format_scan_summary(summary, title))
 
     def on_scan_failed(self, message: str) -> None:
         self._refresh_database_status()
@@ -161,6 +185,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+        self.scan_started_at = None
         self.statusBar().showMessage("Scanner stopped because of an error.")
         self.scan_details.setText(f"Scanner could not finish. Reason: {message}")
 
@@ -173,9 +198,21 @@ class MainWindow(QMainWindow):
         self.scanner_worker = None
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self.scanner_worker:
+        if self.scanner_worker and self.scanner_thread and self.scanner_thread.isRunning():
+            answer = QMessageBox.question(
+                self,
+                "Scanner is running",
+                "Skanowanie jest nadal w toku. Czy chcesz je bezpiecznie przerwać i zobaczyć podsumowanie?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer == QMessageBox.No:
+                event.ignore()
+                return
+            self.close_after_scan = True
             self.scanner_worker.cancel()
-        if self.scanner_thread:
-            self.scanner_thread.quit()
-            self.scanner_thread.wait(5000)
+            self.cancel_button.setEnabled(False)
+            self.statusBar().showMessage("Cancelling scanner… Please wait for the final summary.")
+            event.ignore()
+            return
         event.accept()
