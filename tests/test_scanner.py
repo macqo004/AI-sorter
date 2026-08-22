@@ -77,14 +77,9 @@ class ScannerTests(unittest.TestCase):
             db = Database(root / "project.db")
             db.open()
             try:
-                discovered_paths: list[str] = []
                 scanner = Scanner(db, worker_count=1)
-                scanner.scan(root, lambda progress: discovered_paths.append(progress.current_discovery_path or ""))
-                seen = [path for path in discovered_paths if path.endswith(("6.jpg", "A.jpg", "C.jpg", "M.jpg", "S.jpg"))]
-                self.assertEqual(
-                    [Path(path).name for path in seen[-5:]],
-                    ["6.jpg", "A.jpg", "C.jpg", "M.jpg", "S.jpg"],
-                )
+                names = [candidate.path.name for candidate in scanner._discover(root)]
+                self.assertEqual(names, ["6.jpg", "A.jpg", "C.jpg", "M.jpg", "S.jpg"])
             finally:
                 db.close()
 
