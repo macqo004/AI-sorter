@@ -14,6 +14,8 @@ $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 $RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef"
 $SafeRefName = ($RepoRef -replace '[^A-Za-z0-9._-]', '_')
+$InstallerStateDir = Join-Path $env:LOCALAPPDATA "AI-Sorter"
+$InstallerStatePath = Join-Path $InstallerStateDir "last-install-path.txt"
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -27,12 +29,43 @@ function Download-File([string]$Url, [string]$Destination) {
     }
 }
 
-function Select-InstallRoot {
+function Get-LastInstallRoot {
+    if (-not (Test-Path $InstallerStatePath)) {
+        return $null
+    }
+    try {
+        $value = (Get-Content -Path $InstallerStatePath -Raw -ErrorAction Stop).Trim()
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            return $null
+        }
+        return $value
+    }
+    catch {
+        return $null
+    }
+}
+
+function Save-LastInstallRoot([string]$Path) {
+    try {
+        New-Item -ItemType Directory -Force -Path $InstallerStateDir | Out-Null
+        Set-Content -Path $InstallerStatePath -Value $Path -Encoding UTF8
+    }
+    catch {
+        Write-Host "Could not save the last installation path. The installation itself will continue." -ForegroundColor Yellow
+    }
+}
+
+function Select-InstallRoot([string]$InitialPath) {
     Add-Type -AssemblyName System.Windows.Forms
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $dialog.Description = "Choose the folder where AI-Sorter will be installed."
     $dialog.ShowNewFolderButton = $true
-    $dialog.SelectedPath = Join-Path $env:USERPROFILE "AI-Sorter"
+    if (-not [string]::IsNullOrWhiteSpace($InitialPath)) {
+        $dialog.SelectedPath = $InitialPath
+    }
+    else {
+        $dialog.SelectedPath = Join-Path $env:USERPROFILE "AI-Sorter"
+    }
     $result = $dialog.ShowDialog()
     if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
         throw "Installation was cancelled because no destination folder was selected."
@@ -45,14 +78,34 @@ try {
         throw "This installer is intended for Windows 10/11."
     }
 
+    $LastInstallRoot = Get-LastInstallRoot
+
     if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
         Write-Step "Choose installation location"
-        try {
-            $InstallRoot = Select-InstallRoot
+        Write-Host "You can paste the full installation path below." -ForegroundColor DarkGray
+        if ($LastInstallRoot) {
+            Write-Host "Press ENTER to reuse the last location:" -ForegroundColor DarkGray
+            Write-Host "  $LastInstallRoot" -ForegroundColor Green
         }
-        catch {
-            Write-Host "Folder selection is unavailable. Enter the installation path manually." -ForegroundColor Yellow
-            $InstallRoot = Read-Host "Installation path"
+        else {
+            Write-Host "Press ENTER to use the default location:" -ForegroundColor DarkGray
+            Write-Host "  $(Join-Path $env:USERPROFILE 'AI-Sorter')" -ForegroundColor Green
+        }
+
+        $ManualPath = Read-Host "Installation path"
+        if (-not [string]::IsNullOrWhiteSpace($ManualPath)) {
+            $InstallRoot = $ManualPath.Trim().Trim('"')
+        }
+        elseif ($LastInstallRoot) {
+            $InstallRoot = $LastInstallRoot
+        }
+        else {
+            $InstallRoot = Join-Path $env:USERPROFILE "AI-Sorter"
+        }
+
+        if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+            Write-Host "Manual path entry was empty. Opening folder browser..." -ForegroundColor Yellow
+            $InstallRoot = Select-InstallRoot -InitialPath $LastInstallRoot
         }
     }
 
@@ -61,6 +114,8 @@ try {
     }
 
     $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
+    Save-LastInstallRoot -Path $InstallRoot
+
     $RuntimeRoot = Join-Path $InstallRoot "runtime"
     $PythonRoot = Join-Path $RuntimeRoot "python"
     $SourceRoot = Join-Path $InstallRoot "app\source"
@@ -172,6 +227,7 @@ Revision: $RepoRef
 Python: $PythonVersion
 Installed: $(Get-Date -Format s)
 InstallRoot: $InstallRoot
+Last-path state: $InstallerStatePath
 "@ | Set-Content -Path (Join-Path $InstallRoot "INSTALLATION.txt") -Encoding UTF8
 
     Remove-Item -Path $RepoZip -Force -ErrorAction SilentlyContinue
@@ -180,6 +236,8 @@ InstallRoot: $InstallRoot
     Write-Host "`nInstallation complete." -ForegroundColor Green
     Write-Host "Location: $InstallRoot"
     Write-Host "Launcher: $LauncherPath"
+    Write-Host "Last installation path is remembered for the next run."
+    Write-Host "You can also paste a different path next time."
     Write-Host "`nThis bootstrap requires Internet access during installation."
 
     Start-Process -FilePath $LauncherPath
