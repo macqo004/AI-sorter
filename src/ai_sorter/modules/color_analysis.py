@@ -13,8 +13,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from PIL import Image, ImageOps
-
 from ..core.database import Database, DatabaseError
 from ..core.models import ModuleExecutionRecord, ModuleRecord
 
@@ -251,11 +249,22 @@ class ColorAnalysis:
 
     def _analyse_target(self, target: _Target) -> _Result:
         try:
+            # Pillow is deliberately loaded only when Color Analysis actually runs.
+            # This keeps the main GUI startup independent from Pillow's native DLLs.
+            from PIL import Image, ImageOps
+        except ImportError as exc:
+            raise RuntimeError(
+                "Moduł Color Analysis nie może wystartować, ponieważ biblioteka Pillow nie jest poprawnie zainstalowana. "
+                "Uruchom ponownie installer AI-Sorter, aby naprawić środowisko."
+            ) from exc
+
+        config = self.config
+        try:
             with Image.open(target.path) as source:
                 image = ImageOps.exif_transpose(source).convert("RGB")
                 original_width, original_height = image.size
                 image.thumbnail(
-                    (self.config.sample_longest_side, self.config.sample_longest_side),
+                    (config.sample_longest_side, config.sample_longest_side),
                     Image.Resampling.BILINEAR,
                 )
                 pixels = list(image.getdata())
@@ -267,14 +276,14 @@ class ColorAnalysis:
 
         gray_like = 0
         saturated = 0
-        hue_weights = [0.0] * self.config.hue_bins
+        hue_weights = [0.0] * config.hue_bins
         for red, green, blue in pixels:
-            if max(red, green, blue) - min(red, green, blue) <= self.config.bw_channel_delta:
+            if max(red, green, blue) - min(red, green, blue) <= config.bw_channel_delta:
                 gray_like += 1
             hue, saturation, _value = colorsys.rgb_to_hsv(red / 255.0, green / 255.0, blue / 255.0)
-            if saturation >= self.config.saturation_floor:
+            if saturation >= config.saturation_floor:
                 saturated += 1
-                hue_index = min(self.config.hue_bins - 1, int(hue * self.config.hue_bins))
+                hue_index = min(config.hue_bins - 1, int(hue * config.hue_bins))
                 hue_weights[hue_index] += saturation
 
         total = len(pixels)
@@ -283,19 +292,19 @@ class ColorAnalysis:
         total_hue_weight = sum(hue_weights)
         dominant_hue_ratio = (max(hue_weights) / total_hue_weight) if total_hue_weight else 0.0
 
-        is_bw = gray_ratio >= self.config.bw_ratio
-        is_mostly_bw = (not is_bw) and gray_ratio >= self.config.mostly_bw_ratio
-        colorful_enough = saturated_ratio >= self.config.minimum_saturated_ratio
+        is_bw = gray_ratio >= config.bw_ratio
+        is_mostly_bw = (not is_bw) and gray_ratio >= config.mostly_bw_ratio
+        colorful_enough = saturated_ratio >= config.minimum_saturated_ratio
         is_monochrome = (
             (not is_bw)
             and colorful_enough
-            and dominant_hue_ratio >= self.config.monochrome_dominant_ratio
+            and dominant_hue_ratio >= config.monochrome_dominant_ratio
         )
         is_mostly_monochrome = (
             (not is_bw)
             and (not is_monochrome)
             and colorful_enough
-            and dominant_hue_ratio >= self.config.mostly_monochrome_dominant_ratio
+            and dominant_hue_ratio >= config.mostly_monochrome_dominant_ratio
         )
 
         payload = {
@@ -311,15 +320,15 @@ class ColorAnalysis:
             "original_width": original_width,
             "original_height": original_height,
             "config": {
-                "sample_longest_side": self.config.sample_longest_side,
-                "bw_channel_delta": self.config.bw_channel_delta,
-                "bw_ratio": self.config.bw_ratio,
-                "mostly_bw_ratio": self.config.mostly_bw_ratio,
-                "saturation_floor": self.config.saturation_floor,
-                "minimum_saturated_ratio": self.config.minimum_saturated_ratio,
-                "monochrome_dominant_ratio": self.config.monochrome_dominant_ratio,
-                "mostly_monochrome_dominant_ratio": self.config.mostly_monochrome_dominant_ratio,
-                "hue_bins": self.config.hue_bins,
+                "sample_longest_side": config.sample_longest_side,
+                "bw_channel_delta": config.bw_channel_delta,
+                "bw_ratio": config.bw_ratio,
+                "mostly_bw_ratio": config.mostly_bw_ratio,
+                "saturation_floor": config.saturation_floor,
+                "minimum_saturated_ratio": config.minimum_saturated_ratio,
+                "monochrome_dominant_ratio": config.monochrome_dominant_ratio,
+                "mostly_monochrome_dominant_ratio": config.mostly_monochrome_dominant_ratio,
+                "hue_bins": config.hue_bins,
             },
         }
         return _Result(target.sha512, payload)
