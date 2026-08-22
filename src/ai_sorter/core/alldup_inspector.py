@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +44,7 @@ class AllDupInspection:
             "",
         ]
         for table in self.tables:
-            count = "unknown" if table.row_count is None else f"{table.row_count:,}"
+            count = "not counted" if table.row_count is None else f"{table.row_count:,}"
             lines.append(f"TABLE {table.name} — rows: {count}")
             for column in table.columns:
                 flags = []
@@ -84,7 +83,7 @@ class AllDupDatabaseInspector:
     _SIZE_NAMES = ("size", "filesize", "file_size", "length", "bytes")
     _TIME_NAMES = ("mtime", "modified", "modified_at", "modify", "last_write", "lastmodified", "timestamp")
 
-    def inspect(self, database_path: Path, count_rows: bool = True) -> AllDupInspection:
+    def inspect(self, database_path: Path, count_rows: bool = False) -> AllDupInspection:
         database_path = database_path.resolve()
         if not database_path.is_file():
             raise ValueError(f"Plik bazy AllDup nie istnieje: {database_path}")
@@ -185,8 +184,6 @@ class AllDupDatabaseInspector:
         tokens = set(value.replace("_", " ").split())
         for needle in needles:
             if needle in value:
-                if needle in tokens:
-                    scores.append("strong")
-                else:
-                    scores.append("possible")
-        return scores[:1]
+                scores.append("strong" if needle in tokens else "possible")
+                break
+        return scores
