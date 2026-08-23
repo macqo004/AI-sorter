@@ -192,6 +192,56 @@ class ScannerStore:
                 "Nie udało się ustalić, które lokalizacje plików są już niedostępne."
             ) from exc
 
+    def clear_folder(self, root: Path) -> tuple[int, int]:
+        """Remove Scanner-owned locations under root and orphaned file identities.
+
+        File records that still have another active location are preserved. Because
+        analysis_result references file_record with ON DELETE CASCADE, only orphaned
+        identities lose their module results as a consequence of this cleanup.
+        """
+        root_text = str(root.resolve()).rstrip("\\/")
+        pattern = root_text + "\\%"
+        try:
+            with self.database.transaction() as connection:
+                location_rows = connection.execute(
+                    """
+                    SELECT DISTINCT sha512
+                    FROM file_location
+                    WHERE location_status IN ('ACTIVE', 'MISSING')
+                      AND (absolute_path = ? OR absolute_path LIKE ?)
+                    """,
+                    (root_text, pattern),
+                ).fetchall()
+                shas = [str(row["sha512"]) for row in location_rows]
+                if not shas:
+                    return 0, 0
+
+                connection.execute(
+                    """
+                    DELETE FROM file_location
+                    WHERE location_status IN ('ACTIVE', 'MISSING')
+                      AND (absolute_path = ? OR absolute_path LIKE ?)
+                    """,
+                    (root_text, pattern),
+                )
+                placeholders = ",".join("?" for _ in shas)
+                orphan_cursor = connection.execute(
+                    f"""
+                    DELETE FROM file_record
+                    WHERE sha512 IN ({placeholders})
+                      AND NOT EXISTS (
+                          SELECT 1 FROM file_location fl WHERE fl.sha512 = file_record.sha512
+                      )
+                    """,
+                    tuple(shas),
+                )
+                return len(shas), max(0, orphan_cursor.rowcount or 0)
+        except Exception as exc:
+            raise DatabaseError(
+                "Nie udało się wyczyścić wyników Scanner dla wybranego folderu. "
+                "Pliki kolekcji nie zostały zmienione."
+            ) from exc
+
     @staticmethod
     def _iso(value: datetime | None) -> str | None:
         return value.isoformat(timespec="seconds") if value is not None else None
