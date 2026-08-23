@@ -94,8 +94,8 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_scan)
         layout.addWidget(self.cancel_button)
 
-        self.color_button = QPushButton("Run Color / BW Analysis", central)
-        self.color_button.clicked.connect(self.start_color_analysis)
+        self.color_button = QPushButton("Run Color / BW Analysis…", central)
+        self.color_button.clicked.connect(self.select_color_root)
         layout.addWidget(self.color_button)
 
         self.color_cancel_button = QPushButton("Cancel Color Analysis", central)
@@ -141,6 +141,14 @@ class MainWindow(QMainWindow):
         root = QFileDialog.getExistingDirectory(self, "Choose folder to scan")
         if root:
             self.start_scan(Path(root))
+
+    def select_color_root(self) -> None:
+        root = QFileDialog.getExistingDirectory(
+            self,
+            "Choose folder for Color / BW analysis",
+        )
+        if root:
+            self.start_color_analysis(Path(root))
 
     def inspect_alldup_database(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -192,7 +200,7 @@ class MainWindow(QMainWindow):
             self.cancel_button.setEnabled(False)
             self.statusBar().showMessage("Cancelling scanner…")
 
-    def start_color_analysis(self) -> None:
+    def start_color_analysis(self, root: Path) -> None:
         self.close_after_color = False
         self.color_started_at = time.perf_counter()
         self._last_color_progress = None
@@ -200,11 +208,13 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
-        self.scan_details.setText("Color Analysis is running…\nElapsed: 00:00:00")
-        self.statusBar().showMessage("Color Analysis is running…")
+        self.scan_details.setText(
+            f"Color Analysis is running…\nFolder: {root}\nElapsed: 00:00:00"
+        )
+        self.statusBar().showMessage(f"Color Analysis is running for {root}…")
         self.elapsed_timer.start()
 
-        analyzer = ColorAnalysis(self.database)
+        analyzer = ColorAnalysis(self.database, scope_root=root)
         self.color_thread = QThread(self)
         self.color_worker = ColorAnalysisWorker(analyzer)
         self.color_worker.moveToThread(self.color_thread)
@@ -257,6 +267,7 @@ class MainWindow(QMainWindow):
         rate = progress.processed / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
             f"Color Analysis\n"
+            f"Considered: {progress.considered}\n"
             f"Processed: {progress.processed}\n"
             f"Errors: {progress.failed}\n"
             f"Rate: {rate:.1f} files/s\n"
