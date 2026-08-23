@@ -26,47 +26,37 @@ from ..core.models import DatabaseStatus
 from ..modules.color_analysis import ColorAnalysis, ColorProgress, ColorSummary
 from ..modules.scanner import Scanner, ScanProgress, ScanSummary
 from .color_analysis_worker import ColorAnalysisWorker
+from .results_browser import ResultsBrowser
 from .scanner_worker import ScannerWorker
 
 
 class MainWindow(QMainWindow):
-    """Foundation GUI with Scanner, Color Analysis and AllDup inspection workflows."""
+    """Foundation GUI with Scanner, Color Analysis, results browsing and AllDup inspection."""
 
-    def __init__(
-        self,
-        project_path: Path,
-        database: Database,
-        database_status: DatabaseStatus,
-        compute_backend: ComputeBackend,
-    ) -> None:
+    def __init__(self, project_path: Path, database: Database, database_status: DatabaseStatus, compute_backend: ComputeBackend) -> None:
         super().__init__()
         self.database = database
         self.project_path = project_path
         self.compute_backend = compute_backend
-
         self.scanner_thread: QThread | None = None
         self.scanner_worker: ScannerWorker | None = None
         self.color_thread: QThread | None = None
         self.color_worker: ColorAnalysisWorker | None = None
-
         self.scan_started_at: float | None = None
         self.color_started_at: float | None = None
         self.close_after_scan = False
         self.close_after_color = False
         self._last_scan_progress: ScanProgress | None = None
         self._last_color_progress: ColorProgress | None = None
-
         self.elapsed_timer = QTimer(self)
         self.elapsed_timer.setInterval(1000)
         self.elapsed_timer.timeout.connect(self._refresh_live_elapsed)
-
         self.setWindowTitle("AI-Sorter")
-        self.resize(920, 900)
+        self.resize(920, 950)
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.addWidget(QLabel("AI-Sorter", central))
-
         form = QFormLayout()
         self.database_status_label = QLabel(central)
         self.schema_label = QLabel(central)
@@ -88,33 +78,29 @@ class MainWindow(QMainWindow):
         self.scan_button = QPushButton("Scan folder…", central)
         self.scan_button.clicked.connect(self.select_scan_root)
         layout.addWidget(self.scan_button)
-
         self.cancel_button = QPushButton("Cancel scan", central)
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_scan)
         layout.addWidget(self.cancel_button)
-
         self.color_button = QPushButton("Run Color / BW Analysis…", central)
         self.color_button.clicked.connect(self.select_color_root)
         layout.addWidget(self.color_button)
-
         self.color_cancel_button = QPushButton("Cancel Color Analysis", central)
         self.color_cancel_button.setEnabled(False)
         self.color_cancel_button.clicked.connect(self.cancel_color_analysis)
         layout.addWidget(self.color_cancel_button)
-
+        self.results_button = QPushButton("Browse database results…", central)
+        self.results_button.clicked.connect(self.browse_results)
+        layout.addWidget(self.results_button)
         self.alldup_button = QPushButton("Inspect AllDup database…", central)
         self.alldup_button.clicked.connect(self.inspect_alldup_database)
         layout.addWidget(self.alldup_button)
-
         self.progress = QProgressBar(central)
         self.progress.setRange(0, 0)
         layout.addWidget(self.progress)
-
         self.scan_details = QLabel("Scanner is idle. Color Analysis is idle.", central)
         self.scan_details.setWordWrap(True)
         layout.addWidget(self.scan_details)
-
         self.setCentralWidget(central)
         status = QStatusBar(self)
         status.showMessage("Application started. No module is running.")
@@ -135,6 +121,7 @@ class MainWindow(QMainWindow):
     def _set_module_controls_enabled(self, enabled: bool) -> None:
         self.scan_button.setEnabled(enabled)
         self.color_button.setEnabled(enabled)
+        self.results_button.setEnabled(enabled)
         self.alldup_button.setEnabled(enabled)
 
     def select_scan_root(self) -> None:
@@ -143,12 +130,13 @@ class MainWindow(QMainWindow):
             self.start_scan(Path(root))
 
     def select_color_root(self) -> None:
-        root = QFileDialog.getExistingDirectory(
-            self,
-            "Choose folder for Color / BW analysis",
-        )
+        root = QFileDialog.getExistingDirectory(self, "Choose folder for Color / BW analysis")
         if root:
             self.start_color_analysis(Path(root))
+
+    def browse_results(self) -> None:
+        dialog = ResultsBrowser(self.database, self)
+        dialog.exec()
 
     def inspect_alldup_database(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -180,7 +168,6 @@ class MainWindow(QMainWindow):
         self.scan_details.setText(f"Scanning: {root}\nElapsed: 00:00:00")
         self.statusBar().showMessage("Scanner is running…")
         self.elapsed_timer.start()
-
         scanner = Scanner(self.database)
         self.scanner_thread = QThread(self)
         self.scanner_worker = ScannerWorker(scanner, root)
@@ -208,12 +195,9 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
-        self.scan_details.setText(
-            f"Color Analysis is running…\nFolder: {root}\nElapsed: 00:00:00"
-        )
+        self.scan_details.setText(f"Color Analysis is running…\nFolder: {root}\nElapsed: 00:00:00")
         self.statusBar().showMessage(f"Color Analysis is running for {root}…")
         self.elapsed_timer.start()
-
         analyzer = ColorAnalysis(self.database, scope_root=root)
         self.color_thread = QThread(self)
         self.color_worker = ColorAnalysisWorker(analyzer)
@@ -248,13 +232,10 @@ class MainWindow(QMainWindow):
         scanned_rate = progress.scanned / elapsed if elapsed > 0 else 0.0
         skipped_rate = progress.skipped / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
-            f"Scanner\n"
-            f"Discovered: {progress.discovered}\n"
-            f"Processed: {progress.processed}\n"
+            f"Scanner\nDiscovered: {progress.discovered}\nProcessed: {progress.processed}\n"
             f"Scanned: {progress.scanned} | Skipped: {progress.skipped} | Errors: {progress.failed}\n"
             f"Scanned rate: {scanned_rate:.1f} files/s | Skipped rate: {skipped_rate:.1f} files/s\n"
-            f"Elapsed: {self._format_duration(elapsed)}\n"
-            f"Discovery: {progress.current_discovery_path or '—'}\n"
+            f"Elapsed: {self._format_duration(elapsed)}\nDiscovery: {progress.current_discovery_path or '—'}\n"
             f"Last completed: {progress.last_completed_path or '—'}"
         )
 
@@ -266,12 +247,8 @@ class MainWindow(QMainWindow):
         elapsed = time.perf_counter() - self.color_started_at if self.color_started_at else 0.0
         rate = progress.processed / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
-            f"Color Analysis\n"
-            f"Considered: {progress.considered}\n"
-            f"Processed: {progress.processed}\n"
-            f"Errors: {progress.failed}\n"
-            f"Rate: {rate:.1f} files/s\n"
-            f"Elapsed: {self._format_duration(elapsed)}\n"
+            f"Color Analysis\nConsidered: {progress.considered}\nProcessed: {progress.processed}\n"
+            f"Errors: {progress.failed}\nRate: {rate:.1f} files/s\nElapsed: {self._format_duration(elapsed)}\n"
             f"Current: {progress.current_path or '—'}"
         )
 
@@ -287,20 +264,14 @@ class MainWindow(QMainWindow):
         skipped_rate = summary.skipped / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
         processed_rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
         return (
-            f"{title}\n\n"
-            f"Discovered: {summary.discovered}\n"
-            f"Processed: {summary.processed}\n"
-            f"Scanned: {summary.scanned}\n"
-            f"Saved: {summary.saved}\n"
-            f"Skipped: {summary.skipped}\n"
-            f"Errors: {summary.failed}\n"
-            f"Missing: {summary.missing}\n\n"
+            f"{title}\n\nDiscovered: {summary.discovered}\nProcessed: {summary.processed}\n"
+            f"Scanned: {summary.scanned}\nSaved: {summary.saved}\nSkipped: {summary.skipped}\n"
+            f"Errors: {summary.failed}\nMissing: {summary.missing}\n\n"
             f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
             f"Discovery: {self._format_duration(summary.discovery_seconds)}\n"
             f"Hashing (worker time): {self._format_duration(summary.hash_seconds)}\n"
             f"Database: {self._format_duration(summary.database_seconds)}\n\n"
-            f"Scanned rate: {scanned_rate:.1f} files/s\n"
-            f"Skipped rate: {skipped_rate:.1f} files/s\n"
+            f"Scanned rate: {scanned_rate:.1f} files/s\nSkipped rate: {skipped_rate:.1f} files/s\n"
             f"Processed rate: {processed_rate:.1f} files/s"
         )
 
@@ -338,11 +309,8 @@ class MainWindow(QMainWindow):
     def _format_color_summary(self, summary: ColorSummary, title: str) -> str:
         rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
         return (
-            f"{title}\n\n"
-            f"Considered: {summary.considered}\n"
-            f"Processed: {summary.processed}\n"
-            f"Skipped: {summary.skipped}\n"
-            f"Errors: {summary.failed}\n\n"
+            f"{title}\n\nConsidered: {summary.considered}\nProcessed: {summary.processed}\n"
+            f"Skipped: {summary.skipped}\nErrors: {summary.failed}\n\n"
             f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
             f"Processed rate: {rate:.1f} files/s"
         )
