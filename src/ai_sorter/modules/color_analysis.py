@@ -79,11 +79,13 @@ class ColorAnalysis:
         config: ColorAnalysisConfig | None = None,
         worker_count: int = 0,
         batch_size: int = 128,
+        scope_root: Path | None = None,
     ) -> None:
         self.database = database
         self.config = config or ColorAnalysisConfig()
         self.worker_count = worker_count or max(1, min(8, (os.cpu_count() or 4) // 2 or 1))
         self.batch_size = max(16, batch_size)
+        self.scope_root = scope_root.resolve() if scope_root else None
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -171,8 +173,16 @@ class ColorAnalysis:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
+
+        params: list[str] = [self.module_id, self.result_key]
+        scope_clause = ""
+        if self.scope_root is not None:
+            root = str(self.scope_root).rstrip("\\/")
+            scope_clause = "\n              AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)"
+            params.extend([root, root + "\\%"]) 
+
         cursor = connection.execute(
-            """
+            f"""
             SELECT f.sha512, MIN(fl.absolute_path) AS absolute_path
             FROM file_record AS f
             JOIN file_location AS fl
@@ -184,11 +194,11 @@ class ColorAnalysis:
                   WHERE ar.sha512 = f.sha512
                     AND ar.module_id = ?
                     AND ar.result_key = ?
-              )
+              ){scope_clause}
             GROUP BY f.sha512
             ORDER BY f.sha512
             """,
-            (self.module_id, self.result_key),
+            tuple(params),
         )
         for row in cursor:
             yield _Target(str(row["sha512"]), Path(str(row["absolute_path"])))
