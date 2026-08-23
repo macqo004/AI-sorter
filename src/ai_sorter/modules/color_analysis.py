@@ -21,17 +21,21 @@ ProgressCallback = Callable[["ColorProgress"], None]
 
 @dataclass(frozen=True, slots=True)
 class ColorAnalysisConfig:
-    """Initial deterministic thresholds; later exposed through Configuration Manager."""
+    """Deterministic thresholds for the second-generation colour classifier."""
 
     sample_longest_side: int = 256
     bw_channel_delta: int = 12
     bw_ratio: float = 0.995
-    mostly_bw_ratio: float = 0.90
-    saturation_floor: float = 0.15
-    minimum_saturated_ratio: float = 0.20
-    monochrome_dominant_ratio: float = 0.82
-    mostly_monochrome_dominant_ratio: float = 0.60
-    hue_bins: int = 18
+    mostly_bw_ratio: float = 0.97
+    saturation_floor: float = 0.18
+    minimum_saturated_ratio: float = 0.12
+    hue_bins: int = 24
+    monochrome_family_ratio: float = 0.90
+    mostly_monochrome_family_ratio: float = 0.75
+    monochrome_secondary_max_ratio: float = 0.08
+    mostly_monochrome_secondary_max_ratio: float = 0.20
+    hue_window_bins: int = 3
+    significant_family_ratio: float = 0.08
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,10 +71,10 @@ class _Result:
 
 
 class ColorAnalysis:
-    """Analyse global image colour characteristics and persist module-owned results."""
+    """Analyse image colour characteristics and persist module-owned results."""
 
     module_id = "color_analysis"
-    module_version = "0.1.0"
+    module_version = "0.2.0"
     result_key = "color_analysis"
 
     def __init__(
@@ -179,7 +183,7 @@ class ColorAnalysis:
         if self.scope_root is not None:
             root = str(self.scope_root).rstrip("\\/")
             scope_clause = "\n              AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)"
-            params.extend([root, root + "\\%"]) 
+            params.extend([root, root + "\\%"])
 
         cursor = connection.execute(
             f"""
@@ -246,7 +250,11 @@ class ColorAnalysis:
                             self.result_key,
                             None,
                             json.dumps(
-                                {**result.payload, "execution_id": execution_id, "module_version": self.module_version},
+                                {
+                                    **result.payload,
+                                    "execution_id": execution_id,
+                                    "module_version": self.module_version,
+                                },
                                 ensure_ascii=False,
                                 sort_keys=True,
                             ),
@@ -260,7 +268,6 @@ class ColorAnalysis:
     def _analyse_target(self, target: _Target) -> _Result:
         try:
             # Pillow is deliberately loaded only when Color Analysis actually runs.
-            # This keeps the main GUI startup independent from Pillow's native DLLs.
             from PIL import Image, ImageOps
         except ImportError as exc:
             raise RuntimeError(
@@ -287,11 +294,18 @@ class ColorAnalysis:
         gray_like = 0
         saturated = 0
         hue_weights = [0.0] * config.hue_bins
+
         for red, green, blue in pixels:
-            if max(red, green, blue) - min(red, green, blue) <= config.bw_channel_delta:
+            channel_delta = max(red, green, blue) - min(red, green, blue)
+            if channel_delta <= config.bw_channel_delta:
                 gray_like += 1
-            hue, saturation, _value = colorsys.rgb_to_hsv(red / 255.0, green / 255.0, blue / 255.0)
-            if saturation >= config.saturation_floor:
+
+            hue, saturation, value = colorsys.rgb_to_hsv(
+                red / 255.0,
+                green / 255.0,
+                blue / 255.0,
+            )
+            if saturation >= config.saturation_floor and value > 0.03:
                 saturated += 1
                 hue_index = min(config.hue_bins - 1, int(hue * config.hue_bins))
                 hue_weights[hue_index] += saturation
@@ -300,21 +314,57 @@ class ColorAnalysis:
         gray_ratio = gray_like / total
         saturated_ratio = saturated / total
         total_hue_weight = sum(hue_weights)
-        dominant_hue_ratio = (max(hue_weights) / total_hue_weight) if total_hue_weight else 0.0
+
+        dominant_family_ratio = 0.0
+        secondary_color_ratio = 0.0
+        significant_family_count = 0
+
+        if total_hue_weight > 0:
+            family_weights = []
+            window = max(1, config.hue_window_bins // 2)
+            for index in range(config.hue_bins):
+                family_weight = 0.0
+                for offset in range(-window, window + 1):
+                    family_weight += hue_weights[(index + offset) % config.hue_bins]
+                family_weights.append(family_weight)
+
+            dominant_window_index = max(range(config.hue_bins), key=family_weights.__getitem__)
+            dominant_weight = family_weights[dominant_window_index]
+            dominant_family_ratio = min(1.0, dominant_weight / total_hue_weight)
+
+            dominant_start = dominant_window_index - window
+            dominant_indices = {
+                (dominant_start + offset) % config.hue_bins
+                for offset in range(2 * window + 1)
+            }
+            secondary_weight = sum(
+                weight for index, weight in enumerate(hue_weights)
+                if index not in dominant_indices
+            )
+            secondary_color_ratio = secondary_weight / total_hue_weight
+            significant_family_count = sum(
+                1 for weight in hue_weights
+                if weight / total_hue_weight >= config.significant_family_ratio
+            )
 
         is_bw = gray_ratio >= config.bw_ratio
         is_mostly_bw = (not is_bw) and gray_ratio >= config.mostly_bw_ratio
+
         colorful_enough = saturated_ratio >= config.minimum_saturated_ratio
         is_monochrome = (
             (not is_bw)
             and colorful_enough
-            and dominant_hue_ratio >= config.monochrome_dominant_ratio
+            and dominant_family_ratio >= config.monochrome_family_ratio
+            and secondary_color_ratio <= config.monochrome_secondary_max_ratio
+            and significant_family_count <= 1
         )
         is_mostly_monochrome = (
             (not is_bw)
             and (not is_monochrome)
             and colorful_enough
-            and dominant_hue_ratio >= config.mostly_monochrome_dominant_ratio
+            and dominant_family_ratio >= config.mostly_monochrome_family_ratio
+            and secondary_color_ratio <= config.mostly_monochrome_secondary_max_ratio
+            and significant_family_count <= 2
         )
 
         payload = {
@@ -324,7 +374,9 @@ class ColorAnalysis:
             "is_mostly_monochrome": is_mostly_monochrome,
             "gray_ratio": round(gray_ratio, 6),
             "saturated_ratio": round(saturated_ratio, 6),
-            "dominant_hue_ratio": round(dominant_hue_ratio, 6),
+            "dominant_hue_family_ratio": round(dominant_family_ratio, 6),
+            "secondary_color_ratio": round(secondary_color_ratio, 6),
+            "significant_color_family_count": significant_family_count,
             "sample_width": image.width,
             "sample_height": image.height,
             "original_width": original_width,
@@ -336,9 +388,13 @@ class ColorAnalysis:
                 "mostly_bw_ratio": config.mostly_bw_ratio,
                 "saturation_floor": config.saturation_floor,
                 "minimum_saturated_ratio": config.minimum_saturated_ratio,
-                "monochrome_dominant_ratio": config.monochrome_dominant_ratio,
-                "mostly_monochrome_dominant_ratio": config.mostly_monochrome_dominant_ratio,
                 "hue_bins": config.hue_bins,
+                "monochrome_family_ratio": config.monochrome_family_ratio,
+                "mostly_monochrome_family_ratio": config.mostly_monochrome_family_ratio,
+                "monochrome_secondary_max_ratio": config.monochrome_secondary_max_ratio,
+                "mostly_monochrome_secondary_max_ratio": config.mostly_monochrome_secondary_max_ratio,
+                "hue_window_bins": config.hue_window_bins,
+                "significant_family_ratio": config.significant_family_ratio,
             },
         }
         return _Result(target.sha512, payload)
