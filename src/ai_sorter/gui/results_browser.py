@@ -20,17 +20,22 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.database import Database
+from ..core.module_result_cleanup import ModuleResultCleanup
 
 
 class ResultsBrowser(QDialog):
     """Browse existing database records without running any module."""
 
+    MODULE_ID = "color_analysis"
+    RESULT_KEY = "color_analysis"
+
     def __init__(self, database: Database, parent=None) -> None:
         super().__init__(parent)
         self.database = database
         self.rows: list[dict[str, object]] = []
+        self.selected_root: Path | None = None
         self.setWindowTitle("AI-Sorter – Database Results")
-        self.resize(1200, 700)
+        self.resize(1250, 760)
 
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
@@ -54,6 +59,10 @@ class ResultsBrowser(QDialog):
         self.export_button = QPushButton("Export CSV…")
         self.export_button.clicked.connect(self.export_csv)
         controls.addWidget(self.export_button)
+        self.clear_button = QPushButton("Clear Color Analysis results…")
+        self.clear_button.clicked.connect(self.clear_results)
+        self.clear_button.setEnabled(False)
+        controls.addWidget(self.clear_button)
         layout.addLayout(controls)
 
         self.summary = QLabel("Choose a folder to inspect database results.")
@@ -77,7 +86,9 @@ class ResultsBrowser(QDialog):
         if connection is None:
             QMessageBox.critical(self, "Database results", "Baza danych projektu nie jest obecnie połączona.")
             return
-        normalized = str(root.resolve()).rstrip("\\/")
+        normalized = root.resolve()
+        self.selected_root = normalized
+        root_text = str(normalized).rstrip("\\/")
         rows = connection.execute(
             """
             SELECT f.sha512, f.size_bytes, fl.absolute_path,
@@ -87,13 +98,13 @@ class ResultsBrowser(QDialog):
               ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
             LEFT JOIN analysis_result AS ar
               ON ar.sha512 = f.sha512
-             AND ar.module_id = 'color_analysis'
-             AND ar.result_key = 'color_analysis'
+             AND ar.module_id = ?
+             AND ar.result_key = ?
             WHERE f.status = 'ACTIVE'
               AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)
             ORDER BY fl.absolute_path
             """,
-            (normalized, normalized + "\\%"),
+            (self.MODULE_ID, self.RESULT_KEY, root_text, root_text + "\\%"),
         ).fetchall()
         self.rows = []
         for row in rows:
@@ -113,7 +124,8 @@ class ResultsBrowser(QDialog):
                 "mostly_monochrome": bool(payload.get("is_mostly_monochrome", False)),
                 "has_result": bool(row["payload_json"]),
             })
-        self.folder_label.setText(f"Folder: {normalized}")
+        self.folder_label.setText(f"Folder: {root_text}")
+        self.clear_button.setEnabled(True)
         self.refresh_view()
 
     def _matches_filter(self, row: dict[str, object]) -> bool:
@@ -161,23 +173,81 @@ class ResultsBrowser(QDialog):
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
 
+    def clear_results(self) -> None:
+        if self.selected_root is None:
+            QMessageBox.information(self, "Clear results", "Najpierw wybierz folder.")
+            return
+
+        cleanup = ModuleResultCleanup(self.database)
+        count = cleanup.count_results(
+            self.MODULE_ID,
+            self.RESULT_KEY,
+            self.selected_root,
+        )
+        if count == 0:
+            QMessageBox.information(
+                self,
+                "Clear results",
+                "W wybranym folderze nie ma wyników Color Analysis do usunięcia.",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Clear Color Analysis results",
+            f"Usunąć {count} wyników Color Analysis z wybranego folderu?\n\n"
+            "Pliki, SHA512 i lokalizacje nie zostaną zmienione.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            deleted = cleanup.clear_results(
+                self.MODULE_ID,
+                self.RESULT_KEY,
+                self.selected_root,
+            )
+            self.load_folder(self.selected_root)
+            QMessageBox.information(
+                self,
+                "Clear results",
+                f"Usunięto {deleted} wyników Color Analysis. Możesz teraz uruchomić analizę ponownie.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Clear results", str(exc))
+
     def export_csv(self) -> None:
         if not self.rows:
             QMessageBox.information(self, "Export CSV", "Najpierw wybierz folder z wynikami.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export results", "color-analysis-results.csv", "CSV files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export results",
+            "color-analysis-results.csv",
+            "CSV files (*.csv)",
+        )
         if not path:
             return
         visible = [row for row in self.rows if self._matches_filter(row)]
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as handle:
                 writer = csv.writer(handle, delimiter=";")
-                writer.writerow(["path", "sha512", "size", "is_bw", "is_mostly_bw", "is_monochrome", "is_mostly_monochrome", "has_result"])
+                writer.writerow([
+                    "path", "sha512", "size", "is_bw", "is_mostly_bw",
+                    "is_monochrome", "is_mostly_monochrome", "has_result",
+                ])
                 for row in visible:
                     writer.writerow([
-                        row["path"], row["sha512"], row["size"], row["bw"], row["mostly_bw"],
-                        row["monochrome"], row["mostly_monochrome"], row["has_result"],
+                        row["path"], row["sha512"], row["size"], row["bw"],
+                        row["mostly_bw"], row["monochrome"], row["mostly_monochrome"],
+                        row["has_result"],
                     ])
             QMessageBox.information(self, "Export CSV", f"Wyniki zapisano do:\n{path}")
         except OSError as exc:
-            QMessageBox.critical(self, "Export CSV", f"Nie udało się zapisać pliku CSV.\nPowód: {exc}")
+            QMessageBox.critical(
+                self,
+                "Export CSV",
+                f"Nie udało się zapisać pliku CSV.\nPowód: {exc}",
+            )
