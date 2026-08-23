@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -19,8 +20,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..core.database import Database
+from ..core.database import Database, DatabaseError
 from ..core.module_result_cleanup import ModuleResultCleanup
+from ..core.scanner_store import ScannerStore
 
 
 class ResultsBrowser(QDialog):
@@ -35,7 +37,7 @@ class ResultsBrowser(QDialog):
         self.rows: list[dict[str, object]] = []
         self.selected_root: Path | None = None
         self.setWindowTitle("AI-Sorter – Database Results")
-        self.resize(1250, 760)
+        self.resize(1400, 800)
 
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
@@ -56,6 +58,10 @@ class ResultsBrowser(QDialog):
         self.choose_button = QPushButton("Choose folder…")
         self.choose_button.clicked.connect(self.choose_folder)
         controls.addWidget(self.choose_button)
+        self.open_button = QPushButton("Open selected file")
+        self.open_button.clicked.connect(self.open_selected_file)
+        self.open_button.setEnabled(False)
+        controls.addWidget(self.open_button)
         self.export_button = QPushButton("Export CSV…")
         self.export_button.clicked.connect(self.export_csv)
         controls.addWidget(self.export_button)
@@ -63,6 +69,10 @@ class ResultsBrowser(QDialog):
         self.clear_button.clicked.connect(self.clear_results)
         self.clear_button.setEnabled(False)
         controls.addWidget(self.clear_button)
+        self.clear_scanner_button = QPushButton("Clear Scanner data for folder…")
+        self.clear_scanner_button.clicked.connect(self.clear_scanner_data)
+        self.clear_scanner_button.setEnabled(False)
+        controls.addWidget(self.clear_scanner_button)
         layout.addLayout(controls)
 
         self.summary = QLabel("Choose a folder to inspect database results.")
@@ -74,6 +84,9 @@ class ResultsBrowser(QDialog):
         ])
         self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.itemSelectionChanged.connect(self._update_open_button)
+        self.table.doubleClicked.connect(self.open_selected_file)
         layout.addWidget(self.table)
 
     def choose_folder(self) -> None:
@@ -126,6 +139,7 @@ class ResultsBrowser(QDialog):
             })
         self.folder_label.setText(f"Folder: {root_text}")
         self.clear_button.setEnabled(True)
+        self.clear_scanner_button.setEnabled(True)
         self.refresh_view()
 
     def _matches_filter(self, row: dict[str, object]) -> bool:
@@ -172,26 +186,48 @@ class ResultsBrowser(QDialog):
                 self.table.setItem(r, c, QTableWidgetItem(value))
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
+        self._update_open_button()
+
+    def _current_visible_rows(self) -> list[dict[str, object]]:
+        return [row for row in self.rows if self._matches_filter(row)]
+
+    def _update_open_button(self) -> None:
+        self.open_button.setEnabled(bool(self.table.selectedItems()))
+
+    def open_selected_file(self) -> None:
+        if not self.table.selectedItems():
+            QMessageBox.information(self, "Open file", "Najpierw wybierz plik z tabeli.")
+            return
+        row_index = self.table.currentRow()
+        visible = self._current_visible_rows()
+        if row_index < 0 or row_index >= len(visible):
+            return
+        path = Path(str(visible[row_index]["path"]))
+        if not path.exists():
+            QMessageBox.warning(
+                self,
+                "Open file",
+                f"Plik nie został znaleziony na dysku:\n{path}\n\nWynik bazy pozostawiono bez zmian.",
+            )
+            return
+        try:
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Open file",
+                f"Nie udało się otworzyć pliku w domyślnej aplikacji.\nPowód: {exc}",
+            )
 
     def clear_results(self) -> None:
         if self.selected_root is None:
             QMessageBox.information(self, "Clear results", "Najpierw wybierz folder.")
             return
-
         cleanup = ModuleResultCleanup(self.database)
-        count = cleanup.count_results(
-            self.MODULE_ID,
-            self.RESULT_KEY,
-            self.selected_root,
-        )
+        count = cleanup.count_results(self.MODULE_ID, self.RESULT_KEY, self.selected_root)
         if count == 0:
-            QMessageBox.information(
-                self,
-                "Clear results",
-                "W wybranym folderze nie ma wyników Color Analysis do usunięcia.",
-            )
+            QMessageBox.information(self, "Clear results", "W wybranym folderze nie ma wyników Color Analysis do usunięcia.")
             return
-
         answer = QMessageBox.question(
             self,
             "Clear Color Analysis results",
@@ -202,13 +238,8 @@ class ResultsBrowser(QDialog):
         )
         if answer != QMessageBox.Yes:
             return
-
         try:
-            deleted = cleanup.clear_results(
-                self.MODULE_ID,
-                self.RESULT_KEY,
-                self.selected_root,
-            )
+            deleted = cleanup.clear_results(self.MODULE_ID, self.RESULT_KEY, self.selected_root)
             self.load_folder(self.selected_root)
             QMessageBox.information(
                 self,
@@ -217,6 +248,55 @@ class ResultsBrowser(QDialog):
             )
         except Exception as exc:
             QMessageBox.critical(self, "Clear results", str(exc))
+
+    def clear_scanner_data(self) -> None:
+        if self.selected_root is None:
+            QMessageBox.information(self, "Clear Scanner data", "Najpierw wybierz folder.")
+            return
+        connection = self.database.connection
+        if connection is None:
+            QMessageBox.critical(self, "Clear Scanner data", "Baza danych projektu nie jest obecnie połączona.")
+            return
+        root_text = str(self.selected_root).rstrip("\\/")
+        try:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM file_location
+                WHERE location_status IN ('ACTIVE', 'MISSING')
+                  AND (absolute_path = ? OR absolute_path LIKE ?)
+                """,
+                (root_text, root_text + "\\%"),
+            ).fetchone()
+            location_count = int(row["count"])
+        except Exception as exc:
+            QMessageBox.critical(self, "Clear Scanner data", f"Nie udało się sprawdzić danych Scanner.\nPowód: {exc}")
+            return
+        if location_count == 0:
+            QMessageBox.information(self, "Clear Scanner data", "W wybranym folderze nie ma danych Scanner do usunięcia.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Clear Scanner data",
+            f"Usunąć dane Scanner dla {location_count} lokalizacji w tym folderze i podfolderach?\n\n"
+            "Zostaną usunięte tylko wpisy z bazy. Pliki na dysku nie zostaną zmienione. "
+            "Rekord SHA512 zostanie zachowany, jeśli ma inną lokalizację w bazie.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            locations, orphaned = ScannerStore(self.database).clear_folder(self.selected_root)
+            self.load_folder(self.selected_root)
+            QMessageBox.information(
+                self,
+                "Clear Scanner data",
+                f"Usunięto {locations} lokalizacji Scanner.\n"
+                f"Usunięto {orphaned} osieroconych rekordów plików wraz z wynikami przypisanymi do tych rekordów.",
+            )
+        except DatabaseError as exc:
+            QMessageBox.critical(self, "Clear Scanner data", str(exc))
 
     def export_csv(self) -> None:
         if not self.rows:
@@ -230,7 +310,7 @@ class ResultsBrowser(QDialog):
         )
         if not path:
             return
-        visible = [row for row in self.rows if self._matches_filter(row)]
+        visible = self._current_visible_rows()
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as handle:
                 writer = csv.writer(handle, delimiter=";")
@@ -246,8 +326,4 @@ class ResultsBrowser(QDialog):
                     ])
             QMessageBox.information(self, "Export CSV", f"Wyniki zapisano do:\n{path}")
         except OSError as exc:
-            QMessageBox.critical(
-                self,
-                "Export CSV",
-                f"Nie udało się zapisać pliku CSV.\nPowód: {exc}",
-            )
+            QMessageBox.critical(self, "Export CSV", f"Nie udało się zapisać pliku CSV.\nPowód: {exc}")
