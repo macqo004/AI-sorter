@@ -1,4 +1,4 @@
-"""Read-only inspector for AllDup SQLite databases."""
+"""Read-only inspector and correlation utilities for AllDup SQLite databases."""
 
 from __future__ import annotations
 
@@ -79,6 +79,54 @@ class AllDupInspection:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True, slots=True)
+class AllDupCorrelationRow:
+    path: str
+    our_sha512: str
+    alldup_match: bool
+    matching_algo_values: tuple[int, ...]
+    all_algo_values: tuple[int, ...]
+    matched_checksum_hex: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AllDupCorrelation:
+    sample_size: int
+    matched_paths: int
+    checksum_matches: int
+    checksum_mismatches: int
+    no_hash_match: int
+    rows: tuple[AllDupCorrelationRow, ...]
+
+    def format_text(self) -> str:
+        lines = [
+            "AllDup ↔ AI-Sorter SHA512 correlation",
+            "",
+            f"Sample: {self.sample_size}",
+            f"Paths found in AllDup: {self.matched_paths}",
+            f"SHA512 matches: {self.checksum_matches}",
+            f"SHA512 mismatches: {self.checksum_mismatches}",
+            f"Files with no hasha row: {self.no_hash_match}",
+            "",
+            "Details:",
+        ]
+        for row in self.rows:
+            if not row.alldup_match:
+                state = "NO HASH ROW"
+            elif row.matched_checksum_hex:
+                state = "SHA512 MATCH"
+            else:
+                state = "HASH MISMATCH"
+            matching = ",".join(str(v) for v in row.matching_algo_values) or "—"
+            all_algos = ",".join(str(v) for v in row.all_algo_values) or "—"
+            lines.append(
+                f"  {state} | matching algo={matching} | all algo={all_algos} | {row.path}"
+            )
+        lines.append("")
+        lines.append("Safety: both databases were opened read-only; no writes or checksum recalculation were performed.")
+        return "\n".join(lines)
+
+
 class AllDupDatabaseInspector:
     """Inspect an AllDup database without modifying it."""
 
@@ -139,15 +187,10 @@ class AllDupDatabaseInspector:
             if shm_present:
                 sidecars.append("-shm")
             sidecar_text = ", ".join(sidecars) if sidecars else "none"
-            hint = (
-                " Zamknij całkowicie AllDup i spróbuj ponownie. "
-                "Jeżeli obok bazy istnieją pliki -wal/-shm, muszą pozostać razem z bazą."
-            )
             raise RuntimeError(
                 "Nie udało się odczytać bazy AllDup w trybie tylko do odczytu. "
-                f"SQLite zgłosił: {exc}. Wykryte pliki towarzyszące: {sidecar_text}."
-                + hint
-                + " Baza nie została zmieniona."
+                f"SQLite zgłosił: {exc}. Wykryte pliki towarzyszące: {sidecar_text}. "
+                "Zamknij całkowicie AllDup i spróbuj ponownie. Baza nie została zmieniona."
             ) from exc
 
         return AllDupInspection(
@@ -162,6 +205,105 @@ class AllDupDatabaseInspector:
             size_candidates=tuple(size_candidates),
             modified_candidates=tuple(modified_candidates),
         )
+
+    def correlate_project_db(self, alldup_database_path: Path, project_database_path: Path, sample_size: int = 50) -> AllDupCorrelation:
+        """Compare a small sample of project SHA512 values against AllDup hasha rows."""
+        alldup_database_path = alldup_database_path.resolve()
+        project_database_path = project_database_path.resolve()
+        sample_size = max(1, min(500, int(sample_size)))
+        if not alldup_database_path.is_file():
+            raise ValueError(f"Plik bazy AllDup nie istnieje: {alldup_database_path}")
+        if not project_database_path.is_file():
+            raise ValueError(f"Baza projektu nie istnieje: {project_database_path}")
+
+        project_uri = f"file:{project_database_path.as_posix()}?mode=ro"
+        alldup_uri = f"file:{alldup_database_path.as_posix()}?mode=ro"
+        try:
+            project = sqlite3.connect(project_uri, uri=True, timeout=10)
+            alldup = sqlite3.connect(alldup_uri, uri=True, timeout=10)
+            project.row_factory = sqlite3.Row
+            alldup.row_factory = sqlite3.Row
+            try:
+                samples = project.execute(
+                    """
+                    SELECT fl.absolute_path, fl.sha512
+                    FROM file_location fl
+                    JOIN file_record fr ON fr.sha512 = fl.sha512
+                    WHERE fl.location_status = 'ACTIVE'
+                      AND fr.status = 'ACTIVE'
+                    ORDER BY RANDOM()
+                    LIMIT ?
+                    """,
+                    (sample_size,),
+                ).fetchall()
+
+                rows: list[AllDupCorrelationRow] = []
+                matched_paths = checksum_matches = checksum_mismatches = no_hash_match = 0
+
+                for sample in samples:
+                    path = str(sample["absolute_path"])
+                    our_sha = str(sample["sha512"]).lower()
+                    candidates = alldup.execute(
+                        """
+                        SELECT h.algo, h.checksum
+                        FROM files f
+                        JOIN hasha h ON h.fileid = f.id
+                        WHERE lower(f.file) = lower(?)
+                        """,
+                        (path,),
+                    ).fetchall()
+                    if not candidates:
+                        no_hash_match += 1
+                        rows.append(AllDupCorrelationRow(path, our_sha, False, (), (), None))
+                        continue
+
+                    matched_paths += 1
+                    matching_algos: set[int] = set()
+                    all_algos: set[int] = set()
+                    matched_checksum: str | None = None
+                    for candidate in candidates:
+                        algo = int(candidate["algo"])
+                        all_algos.add(algo)
+                        blob = candidate["checksum"]
+                        if blob is None:
+                            continue
+                        hex_value = blob.hex() if isinstance(blob, bytes) else bytes(blob).hex()
+                        if hex_value.casefold() == our_sha.casefold():
+                            matching_algos.add(algo)
+                            matched_checksum = hex_value
+
+                    if matching_algos:
+                        checksum_matches += 1
+                    else:
+                        checksum_mismatches += 1
+
+                    rows.append(
+                        AllDupCorrelationRow(
+                            path=path,
+                            our_sha512=our_sha,
+                            alldup_match=True,
+                            matching_algo_values=tuple(sorted(matching_algos)),
+                            all_algo_values=tuple(sorted(all_algos)),
+                            matched_checksum_hex=matched_checksum,
+                        )
+                    )
+
+                return AllDupCorrelation(
+                    sample_size=len(samples),
+                    matched_paths=matched_paths,
+                    checksum_matches=checksum_matches,
+                    checksum_mismatches=checksum_mismatches,
+                    no_hash_match=no_hash_match,
+                    rows=tuple(rows),
+                )
+            finally:
+                project.close()
+                alldup.close()
+        except sqlite3.Error as exc:
+            raise RuntimeError(
+                "Nie udało się porównać bazy AllDup z bazą projektu w trybie tylko do odczytu. "
+                f"SQLite zgłosił: {exc}. Żadna z baz nie została zmieniona."
+            ) from exc
 
     @staticmethod
     def _looks_like_sqlite(path: Path) -> bool:
