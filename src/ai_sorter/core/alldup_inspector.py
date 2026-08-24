@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,9 +85,11 @@ class AllDupCorrelationRow:
     path: str
     our_sha512: str
     alldup_match: bool
-    matching_algo_values: tuple[int, ...]
-    all_algo_values: tuple[int, ...]
+    matching_ctype_values: tuple[int, ...]
+    all_ctype_values: tuple[int, ...]
     matched_checksum_hex: str | None
+    recomputed_sha512: str | None
+    scanner_matches_disk: bool | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +98,8 @@ class AllDupCorrelation:
     matched_paths: int
     checksum_matches: int
     checksum_mismatches: int
-    no_hash_match: int
+    no_sha512_row: int
+    scanner_disk_mismatches: int
     rows: tuple[AllDupCorrelationRow, ...]
 
     def format_text(self) -> str:
@@ -104,26 +108,37 @@ class AllDupCorrelation:
             "",
             f"Sample: {self.sample_size}",
             f"Paths found in AllDup: {self.matched_paths}",
-            f"SHA512 matches: {self.checksum_matches}",
-            f"SHA512 mismatches: {self.checksum_mismatches}",
-            f"Files with no hasha row: {self.no_hash_match}",
+            f"AllDup SHA512 matches: {self.checksum_matches}",
+            f"AllDup SHA512 mismatches: {self.checksum_mismatches}",
+            f"Files with no hashc SHA512 row: {self.no_sha512_row}",
+            f"Scanner vs disk mismatches: {self.scanner_disk_mismatches}",
+            "",
+            "AllDup SHA-512 mapping: hashc.ctype = 5",
             "",
             "Details:",
         ]
         for row in self.rows:
             if not row.alldup_match:
-                state = "NO HASH ROW"
-            elif row.matched_checksum_hex:
+                state = "NO PATH MATCH"
+            elif not row.matching_ctype_values and row.recomputed_sha512 is None:
+                state = "NO SHA512 ROW"
+            elif row.matching_ctype_values:
                 state = "SHA512 MATCH"
             else:
-                state = "HASH MISMATCH"
-            matching = ",".join(str(v) for v in row.matching_algo_values) or "—"
-            all_algos = ",".join(str(v) for v in row.all_algo_values) or "—"
+                state = "SHA512 MISMATCH"
+            ctypes = ",".join(str(v) for v in row.all_ctype_values) or "—"
+            matching = ",".join(str(v) for v in row.matching_ctype_values) or "—"
+            scanner_state = "—"
+            if row.scanner_matches_disk is True:
+                scanner_state = "MATCH"
+            elif row.scanner_matches_disk is False:
+                scanner_state = "MISMATCH"
             lines.append(
-                f"  {state} | matching algo={matching} | all algo={all_algos} | {row.path}"
+                f"  {state} | matching ctype={matching} | all ctype={ctypes} | "
+                f"scanner/disk={scanner_state} | {row.path}"
             )
         lines.append("")
-        lines.append("Safety: both databases were opened read-only; no writes or checksum recalculation were performed.")
+        lines.append("Safety: both databases were opened read-only; source files were read only for optional SHA-512 verification.")
         return "\n".join(lines)
 
 
@@ -206,11 +221,17 @@ class AllDupDatabaseInspector:
             modified_candidates=tuple(modified_candidates),
         )
 
-    def correlate_project_db(self, alldup_database_path: Path, project_database_path: Path, sample_size: int = 50) -> AllDupCorrelation:
-        """Compare a small sample of project SHA512 values against AllDup hasha rows."""
+    def correlate_project_db(
+        self,
+        alldup_database_path: Path,
+        project_database_path: Path,
+        sample_size: int = 50,
+        verify_disk: bool = False,
+    ) -> AllDupCorrelation:
+        """Compare project SHA512 values against AllDup hashc.ctype=5 (SHA-512) rows."""
         alldup_database_path = alldup_database_path.resolve()
         project_database_path = project_database_path.resolve()
-        sample_size = max(1, min(500, int(sample_size)))
+        sample_size = max(1, min(5000, int(sample_size)))
         if not alldup_database_path.is_file():
             raise ValueError(f"Plik bazy AllDup nie istnieje: {alldup_database_path}")
         if not project_database_path.is_file():
@@ -238,53 +259,65 @@ class AllDupDatabaseInspector:
                 ).fetchall()
 
                 rows: list[AllDupCorrelationRow] = []
-                matched_paths = checksum_matches = checksum_mismatches = no_hash_match = 0
+                matched_paths = checksum_matches = checksum_mismatches = no_sha512_row = 0
+                scanner_disk_mismatches = 0
 
                 for sample in samples:
                     path = str(sample["absolute_path"])
                     our_sha = str(sample["sha512"]).lower()
-                    candidates = alldup.execute(
-                        """
-                        SELECT h.algo, h.checksum
-                        FROM files f
-                        JOIN hasha h ON h.fileid = f.id
-                        WHERE lower(f.file) = lower(?)
-                        """,
-                        (path,),
-                    ).fetchall()
+                    candidates = self._find_alldup_file_rows(alldup, path)
                     if not candidates:
-                        no_hash_match += 1
-                        rows.append(AllDupCorrelationRow(path, our_sha, False, (), (), None))
+                        rows.append(AllDupCorrelationRow(path, our_sha, False, (), (), None, None, None))
                         continue
 
+                    matched_file_id = int(candidates[0]["id"])
                     matched_paths += 1
-                    matching_algos: set[int] = set()
-                    all_algos: set[int] = set()
+                    hash_rows = alldup.execute(
+                        "SELECT ctype, checksum FROM hashc WHERE fileid = ? ORDER BY ctype",
+                        (matched_file_id,),
+                    ).fetchall()
+                    matching_ctypes: set[int] = set()
+                    all_ctypes: set[int] = set()
                     matched_checksum: str | None = None
-                    for candidate in candidates:
-                        algo = int(candidate["algo"])
-                        all_algos.add(algo)
+                    for candidate in hash_rows:
+                        ctype = int(candidate["ctype"])
+                        all_ctypes.add(ctype)
                         blob = candidate["checksum"]
                         if blob is None:
                             continue
-                        hex_value = blob.hex() if isinstance(blob, bytes) else bytes(blob).hex()
-                        if hex_value.casefold() == our_sha.casefold():
-                            matching_algos.add(algo)
-                            matched_checksum = hex_value
+                        blob_bytes = blob if isinstance(blob, bytes) else bytes(blob)
+                        if ctype == 5 and len(blob_bytes) == 64:
+                            hex_value = blob_bytes.hex()
+                            if hex_value.casefold() == our_sha.casefold():
+                                matching_ctypes.add(ctype)
+                                matched_checksum = hex_value
 
-                    if matching_algos:
+                    if matching_ctypes:
                         checksum_matches += 1
                     else:
                         checksum_mismatches += 1
+
+                    recomputed_sha = None
+                    scanner_matches_disk = None
+                    if verify_disk:
+                        recomputed_sha = self._compute_sha512(Path(path))
+                        scanner_matches_disk = recomputed_sha.casefold() == our_sha.casefold()
+                        if not scanner_matches_disk:
+                            scanner_disk_mismatches += 1
+
+                    if not matching_ctypes:
+                        no_sha512_row += 1
 
                     rows.append(
                         AllDupCorrelationRow(
                             path=path,
                             our_sha512=our_sha,
                             alldup_match=True,
-                            matching_algo_values=tuple(sorted(matching_algos)),
-                            all_algo_values=tuple(sorted(all_algos)),
+                            matching_ctype_values=tuple(sorted(matching_ctypes)),
+                            all_ctype_values=tuple(sorted(all_ctypes)),
                             matched_checksum_hex=matched_checksum,
+                            recomputed_sha512=recomputed_sha,
+                            scanner_matches_disk=scanner_matches_disk,
                         )
                     )
 
@@ -293,7 +326,8 @@ class AllDupDatabaseInspector:
                     matched_paths=matched_paths,
                     checksum_matches=checksum_matches,
                     checksum_mismatches=checksum_mismatches,
-                    no_hash_match=no_hash_match,
+                    no_sha512_row=no_sha512_row,
+                    scanner_disk_mismatches=scanner_disk_mismatches,
                     rows=tuple(rows),
                 )
             finally:
@@ -304,6 +338,40 @@ class AllDupDatabaseInspector:
                 "Nie udało się porównać bazy AllDup z bazą projektu w trybie tylko do odczytu. "
                 f"SQLite zgłosił: {exc}. Żadna z baz nie została zmieniona."
             ) from exc
+
+    @staticmethod
+    def _find_alldup_file_rows(connection: sqlite3.Connection, path: str) -> list[sqlite3.Row]:
+        normalized = path.replace("/", "\\").lower()
+        rows = connection.execute(
+            "SELECT id, file FROM files WHERE lower(replace(file, '/', char(92))) = ? LIMIT 2",
+            (normalized,),
+        ).fetchall()
+        if rows:
+            return rows
+
+        parts = [part for part in normalized.split("\\") if part]
+        for index in range(max(0, len(parts) - 8), len(parts)):
+            suffix = "\\".join(parts[index:])
+            if len(suffix) < 8:
+                continue
+            rows = connection.execute(
+                "SELECT id, file FROM files WHERE lower(replace(file, '/', char(92))) LIKE ? LIMIT 2",
+                ("%\\" + suffix,),
+            ).fetchall()
+            if len(rows) == 1:
+                return rows
+        return []
+
+    @staticmethod
+    def _compute_sha512(path: Path) -> str | None:
+        try:
+            digest = hashlib.sha512()
+            with path.open("rb", buffering=1024 * 1024) as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            return None
 
     @staticmethod
     def _looks_like_sqlite(path: Path) -> bool:
