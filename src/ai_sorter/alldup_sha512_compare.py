@@ -49,8 +49,6 @@ def fetch_hash_rows(alldup: sqlite3.Connection, file_id: int) -> list[sqlite3.Ro
 
 
 def exact_file_candidates(alldup: sqlite3.Connection, path: str) -> list[sqlite3.Row]:
-    # `files.file` has a unique index in the inspected AllDup database, so keep
-    # this lookup index-friendly and try only the most likely path spellings.
     variants = []
     normalized = path.replace("/", "\\")
     variants.append(path)
@@ -76,25 +74,45 @@ def exact_file_candidates(alldup: sqlite3.Connection, path: str) -> list[sqlite3
     return result
 
 
-def suffix_candidates(alldup: sqlite3.Connection, path: str, size: int) -> list[sqlite3.Row]:
-    """Try a bounded suffix lookup for cases where one DB has a different root.
+def _like_escape(value: str) -> str:
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
-    This is diagnostic/fallback only. It is deliberately rejected when multiple
-    files share the same basename and size.
+
+def suffix_candidates(alldup: sqlite3.Connection, path: str, size: int) -> tuple[list[sqlite3.Row], str | None]:
+    """Find the same path under a different root, using the deepest unique suffix.
+
+    For example, if our path is D:\\Collection\\A\\B\\image.jpg and AllDup stores
+    E:\\Archive\\A\\B\\image.jpg, the search tries A\\B\\image.jpg before falling
+    back to B\\image.jpg and finally the filename. Size is always required.
     """
-    name = basename(path)
-    rows = alldup.execute(
-        """
-        SELECT f.id, f.file
-        FROM files f
-        JOIN hasha h ON h.fileid = f.id AND h.fsize = ?
-        WHERE f.file LIKE ? ESCAPE '\\'
-        GROUP BY f.id, f.file
-        LIMIT 10
-        """,
-        (size, "%" + "\\" + name),
-    ).fetchall()
-    return rows
+    normalized = normalize_path(path)
+    components = [part for part in normalized.split("\\") if part]
+    # More components give a safer match. Avoid including drive letters.
+    usable = components[1:] if components and components[0].endswith(":") else components
+    attempts = []
+    for count in (5, 4, 3, 2):
+        if len(usable) >= count:
+            attempts.append("\\".join(usable[-count:]))
+    if components:
+        attempts.append(components[-1])
+
+    for suffix in dict.fromkeys(attempts):
+        escaped = _like_escape(suffix)
+        pattern = "%\\" + escaped
+        rows = alldup.execute(
+            """
+            SELECT f.id, f.file
+            FROM files f
+            JOIN hasha h ON h.fileid = f.id AND h.fsize = ?
+            WHERE lower(f.file) LIKE lower(?) ESCAPE '!'
+            GROUP BY f.id, f.file
+            LIMIT 10
+            """,
+            (size, pattern),
+        ).fetchall()
+        if rows:
+            return rows, suffix
+    return [], None
 
 
 def main() -> int:
@@ -128,6 +146,7 @@ def main() -> int:
             algo_counts: dict[int, int] = {}
             diagnostics_project: list[str] = []
             diagnostics_all_dup: list[str] = []
+            diagnostics_suffixes: list[str] = []
 
             for sample in samples:
                 path = str(sample["absolute_path"])
@@ -136,13 +155,16 @@ def main() -> int:
 
                 candidates = exact_file_candidates(alldup, path)
                 match_type = "exact"
+                suffix_used = None
                 if candidates:
                     exact_matches += 1
                 else:
-                    candidates = suffix_candidates(alldup, path, size) if size >= 0 else []
+                    candidates, suffix_used = suffix_candidates(alldup, path, size) if size >= 0 else ([], None)
                     if len(candidates) == 1:
                         suffix_matches += 1
                         match_type = "suffix"
+                        if suffix_used and len(diagnostics_suffixes) < 5:
+                            diagnostics_suffixes.append(suffix_used)
                     elif len(candidates) > 1:
                         ambiguous += 1
                         candidates = []
@@ -181,8 +203,8 @@ def main() -> int:
             print("AllDup ↔ AI-Sorter SHA512 correlation")
             print()
             print(f"Sample: {len(samples)}")
-            print(f"Exact normalized-path matches: {exact_matches}")
-            print(f"Fallback suffix name+size matches: {suffix_matches}")
+            print(f"Exact path matches: {exact_matches}")
+            print(f"Different-root suffix matches: {suffix_matches}")
             print(f"Ambiguous suffix matches rejected: {ambiguous}")
             print(f"No path match: {no_path}")
             print(f"SHA512 matches: {checksum_matches}")
@@ -197,19 +219,24 @@ def main() -> int:
                 print("  none")
 
             print()
-            print("AllDup path samples (database format):")
+            print("First AllDup paths stored in the database:")
             for row in alldup.execute("SELECT file FROM files ORDER BY id LIMIT 5").fetchall():
                 print(f"  {row['file']}")
 
-            if diagnostics_project:
+            if diagnostics_suffixes:
                 print()
-                print("AI-Sorter paths that did not match:")
-                for value in diagnostics_project:
+                print("Suffixes that produced matches:")
+                for value in diagnostics_suffixes:
                     print(f"  {value}")
             if diagnostics_all_dup:
                 print()
-                print("AllDup paths matched by suffix fallback:")
+                print("AllDup paths matched by suffix:")
                 for value in diagnostics_all_dup:
+                    print(f"  {value}")
+            if diagnostics_project:
+                print()
+                print("AI-Sorter paths still without a match:")
+                for value in diagnostics_project:
                     print(f"  {value}")
 
             print()
