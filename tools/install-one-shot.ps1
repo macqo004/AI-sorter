@@ -73,6 +73,33 @@ function Select-InstallRoot([string]$InitialPath) {
     return $dialog.SelectedPath
 }
 
+function Test-VcRedistX64Installed {
+    $registryPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+
+    foreach ($registryPath in $registryPaths) {
+        try {
+            $entries = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.DisplayName -and
+                    $_.DisplayName -match 'Microsoft Visual C\+\+.*Redistributable' -and
+                    $_.DisplayName -match '2015.*2022|2015-2022' -and
+                    ($_.DisplayName -match '\(x64\)' -or $_.DisplayName -match 'x64')
+                }
+            if ($entries) {
+                return $true
+            }
+        }
+        catch {
+            # Registry inspection is only a convenience check. The installer below remains authoritative.
+        }
+    }
+    return $false
+}
+
 try {
     if ($env:OS -ne "Windows_NT") {
         throw "This installer is intended for Windows 10/11."
@@ -160,15 +187,29 @@ try {
     Copy-Item -Path (Join-Path $ExtractedRepo.FullName "src") -Destination $SourceRoot -Recurse -Force
     Copy-Item -Path (Join-Path $ExtractedRepo.FullName "pyproject.toml") -Destination $SourceRoot -Force
 
-    Write-Step "Installing Microsoft Visual C++ runtime if required"
-    $VcInstaller = Join-Path $env:TEMP "vc_redist.x64.exe"
-    Download-File -Url $VcRedistUrl -Destination $VcInstaller
-    $VcProcess = Start-Process -FilePath $VcInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
-    if ($VcProcess.ExitCode -notin @(0, 1638, 3010)) {
-        throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
+    Write-Step "Checking Microsoft Visual C++ runtime"
+    if (Test-VcRedistX64Installed) {
+        Write-Host "Microsoft Visual C++ Runtime x64 is already installed. Skipping installation." -ForegroundColor Green
     }
-    if ($VcProcess.ExitCode -eq 1638) {
-        Write-Host "Microsoft Visual C++ Runtime is already installed. Continuing." -ForegroundColor Green
+    else {
+        Write-Host "Microsoft Visual C++ Runtime x64 was not detected. Installing it now." -ForegroundColor DarkGray
+        $VcInstaller = Join-Path $env:TEMP "vc_redist.x64.exe"
+        Download-File -Url $VcRedistUrl -Destination $VcInstaller
+        $VcProcess = Start-Process -FilePath $VcInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
+        switch ($VcProcess.ExitCode) {
+            0 {
+                Write-Host "Microsoft Visual C++ Runtime installed successfully." -ForegroundColor Green
+            }
+            1638 {
+                Write-Host "Microsoft Visual C++ Runtime was already installed by another package or version. Continuing." -ForegroundColor Green
+            }
+            3010 {
+                Write-Host "Microsoft Visual C++ Runtime installed successfully. Windows reports that a restart may be required; continuing without reboot." -ForegroundColor Yellow
+            }
+            default {
+                throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
+            }
+        }
     }
 
     Write-Step "Installing Python $PythonVersion locally"
