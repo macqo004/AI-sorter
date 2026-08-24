@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 ai-sorter = "ai_sorter.main:main"
+ai-sorter-alldup-sha512 = "ai_sorter.alldup_sha512_compare:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
