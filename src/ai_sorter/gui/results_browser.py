@@ -1,4 +1,4 @@
-"""Database-backed results browser for module outputs."""
+"""Database-backed results browser and human review UI."""
 
 from __future__ import annotations
 
@@ -21,12 +21,13 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.database import Database, DatabaseError
+from ..core.manual_review import ManualReviewStore
 from ..core.module_result_cleanup import ModuleResultCleanup
 from ..core.scanner_store import ScannerStore
 
 
 class ResultsBrowser(QDialog):
-    """Browse existing database records without running any module."""
+    """Browse existing database records and manually label Color Analysis results."""
 
     MODULE_ID = "color_analysis"
     RESULT_KEY = "color_analysis"
@@ -36,8 +37,9 @@ class ResultsBrowser(QDialog):
         self.database = database
         self.rows: list[dict[str, object]] = []
         self.selected_root: Path | None = None
+        self.review_store = ManualReviewStore(database)
         self.setWindowTitle("AI-Sorter – Database Results")
-        self.resize(1400, 800)
+        self.resize(1500, 820)
 
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
@@ -50,6 +52,10 @@ class ResultsBrowser(QDialog):
             "Monochrome",
             "Mostly Monochrome",
             "No result",
+            "Unreviewed",
+            "Reviewed: Normal",
+            "Reviewed: Mostly Monochrome",
+            "Reviewed: Monochrome",
         ])
         self.filter_combo.currentIndexChanged.connect(self.refresh_view)
         controls.addWidget(self.folder_label, 1)
@@ -62,6 +68,22 @@ class ResultsBrowser(QDialog):
         self.open_button.clicked.connect(self.open_selected_file)
         self.open_button.setEnabled(False)
         controls.addWidget(self.open_button)
+        self.normal_button = QPushButton("Review: Normal")
+        self.normal_button.clicked.connect(lambda: self.set_review("normal"))
+        self.normal_button.setEnabled(False)
+        controls.addWidget(self.normal_button)
+        self.mostly_mono_button = QPushButton("Review: Mostly Monochrome")
+        self.mostly_mono_button.clicked.connect(lambda: self.set_review("mostly_monochrome"))
+        self.mostly_mono_button.setEnabled(False)
+        controls.addWidget(self.mostly_mono_button)
+        self.mono_button = QPushButton("Review: Monochrome")
+        self.mono_button.clicked.connect(lambda: self.set_review("monochrome"))
+        self.mono_button.setEnabled(False)
+        controls.addWidget(self.mono_button)
+        self.clear_review_button = QPushButton("Clear review")
+        self.clear_review_button.clicked.connect(self.clear_review)
+        self.clear_review_button.setEnabled(False)
+        controls.addWidget(self.clear_review_button)
         self.export_button = QPushButton("Export CSV…")
         self.export_button.clicked.connect(self.export_csv)
         controls.addWidget(self.export_button)
@@ -76,16 +98,17 @@ class ResultsBrowser(QDialog):
         layout.addLayout(controls)
 
         self.summary = QLabel("Choose a folder to inspect database results.")
+        self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
-        self.table = QTableWidget(0, 7, self)
+        self.table = QTableWidget(0, 8, self)
         self.table.setHorizontalHeaderLabels([
-            "Path", "SHA512", "Size", "BW", "Mostly BW", "Monochrome", "Mostly Mono",
+            "Path", "SHA512", "Size", "BW", "Mostly BW", "Monochrome", "Mostly Mono", "Manual review",
         ])
         self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.itemSelectionChanged.connect(self._update_open_button)
+        self.table.itemSelectionChanged.connect(self._update_action_buttons)
         self.table.doubleClicked.connect(self.open_selected_file)
         layout.addWidget(self.table)
 
@@ -127,15 +150,17 @@ class ResultsBrowser(QDialog):
                     payload = json.loads(row["payload_json"])
                 except (TypeError, ValueError):
                     payload = {}
+            sha512 = str(row["sha512"])
             self.rows.append({
                 "path": str(row["absolute_path"]),
-                "sha512": str(row["sha512"]),
+                "sha512": sha512,
                 "size": row["size_bytes"],
                 "bw": bool(payload.get("is_bw", False)),
                 "mostly_bw": bool(payload.get("is_mostly_bw", False)),
                 "monochrome": bool(payload.get("is_monochrome", False)),
                 "mostly_monochrome": bool(payload.get("is_mostly_monochrome", False)),
                 "has_result": bool(row["payload_json"]),
+                "manual_review": self.review_store.get_label(sha512),
             })
         self.folder_label.setText(f"Folder: {root_text}")
         self.clear_button.setEnabled(True)
@@ -148,6 +173,15 @@ class ResultsBrowser(QDialog):
             return True
         if selected == "No result":
             return not bool(row["has_result"])
+        if selected == "Unreviewed":
+            return row["manual_review"] is None
+        label_map = {
+            "Reviewed: Normal": "normal",
+            "Reviewed: Mostly Monochrome": "mostly_monochrome",
+            "Reviewed: Monochrome": "monochrome",
+        }
+        if selected in label_map:
+            return row["manual_review"] == label_map[selected]
         return bool(row[{
             "BW": "bw",
             "Mostly BW": "mostly_bw",
@@ -163,16 +197,28 @@ class ResultsBrowser(QDialog):
             "Monochrome": sum(bool(row["monochrome"]) for row in self.rows),
             "Mostly Monochrome": sum(bool(row["mostly_monochrome"]) for row in self.rows),
             "No result": sum(not bool(row["has_result"]) for row in self.rows),
+            "Normal": sum(row["manual_review"] == "normal" for row in self.rows),
+            "Reviewed Mostly": sum(row["manual_review"] == "mostly_monochrome" for row in self.rows),
+            "Reviewed Mono": sum(row["manual_review"] == "monochrome" for row in self.rows),
+            "Unreviewed": sum(row["manual_review"] is None for row in self.rows),
         }
         self.summary.setText(
             f"Records: {len(self.rows)} | Showing: {len(visible)} | "
             f"BW: {counts['BW']} | Mostly BW: {counts['Mostly BW']} | "
             f"Monochrome: {counts['Monochrome']} | Mostly Monochrome: {counts['Mostly Monochrome']} | "
-            f"No result: {counts['No result']}"
+            f"No result: {counts['No result']} | "
+            f"Manual: Normal {counts['Normal']} | Mostly Mono {counts['Reviewed Mostly']} | "
+            f"Mono {counts['Reviewed Mono']} | Unreviewed {counts['Unreviewed']}"
         )
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(visible))
         for r, row in enumerate(visible):
+            review_label = {
+                "normal": "NORMAL",
+                "mostly_monochrome": "MOSTLY MONO",
+                "monochrome": "MONOCHROME",
+                None: "",
+            }[row["manual_review"]]
             values = [
                 str(row["path"]),
                 str(row["sha512"]),
@@ -181,28 +227,41 @@ class ResultsBrowser(QDialog):
                 "YES" if row["mostly_bw"] else "",
                 "YES" if row["monochrome"] else "",
                 "YES" if row["mostly_monochrome"] else "",
+                review_label,
             ]
             for c, value in enumerate(values):
                 self.table.setItem(r, c, QTableWidgetItem(value))
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
-        self._update_open_button()
+        self._update_action_buttons()
 
     def _current_visible_rows(self) -> list[dict[str, object]]:
         return [row for row in self.rows if self._matches_filter(row)]
 
-    def _update_open_button(self) -> None:
-        self.open_button.setEnabled(bool(self.table.selectedItems()))
-
-    def open_selected_file(self) -> None:
+    def _selected_row(self) -> dict[str, object] | None:
         if not self.table.selectedItems():
-            QMessageBox.information(self, "Open file", "Najpierw wybierz plik z tabeli.")
-            return
+            return None
         row_index = self.table.currentRow()
         visible = self._current_visible_rows()
         if row_index < 0 or row_index >= len(visible):
+            return None
+        return visible[row_index]
+
+    def _update_action_buttons(self) -> None:
+        selected = self._selected_row()
+        enabled = selected is not None
+        self.open_button.setEnabled(enabled)
+        self.normal_button.setEnabled(enabled)
+        self.mostly_mono_button.setEnabled(enabled)
+        self.mono_button.setEnabled(enabled)
+        self.clear_review_button.setEnabled(enabled and selected["manual_review"] is not None if selected else False)
+
+    def open_selected_file(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            QMessageBox.information(self, "Open file", "Najpierw wybierz plik z tabeli.")
             return
-        path = Path(str(visible[row_index]["path"]))
+        path = Path(str(row["path"]))
         if not path.exists():
             QMessageBox.warning(
                 self,
@@ -213,11 +272,29 @@ class ResultsBrowser(QDialog):
         try:
             os.startfile(str(path))  # type: ignore[attr-defined]
         except OSError as exc:
-            QMessageBox.critical(
-                self,
-                "Open file",
-                f"Nie udało się otworzyć pliku w domyślnej aplikacji.\nPowód: {exc}",
-            )
+            QMessageBox.critical(self, "Open file", f"Nie udało się otworzyć pliku w domyślnej aplikacji.\nPowód: {exc}")
+
+    def set_review(self, label: str) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        try:
+            self.review_store.set_label(str(row["sha512"]), label)
+            row["manual_review"] = label
+            self.refresh_view()
+        except DatabaseError as exc:
+            QMessageBox.critical(self, "Manual review", str(exc))
+
+    def clear_review(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        try:
+            self.review_store.clear_label(str(row["sha512"]))
+            row["manual_review"] = None
+            self.refresh_view()
+        except DatabaseError as exc:
+            QMessageBox.critical(self, "Manual review", str(exc))
 
     def clear_results(self) -> None:
         if self.selected_root is None:
@@ -232,7 +309,7 @@ class ResultsBrowser(QDialog):
             self,
             "Clear Color Analysis results",
             f"Usunąć {count} wyników Color Analysis z wybranego folderu?\n\n"
-            "Pliki, SHA512 i lokalizacje nie zostaną zmienione.",
+            "Ręczne oceny pozostaną zachowane. Pliki, SHA512 i lokalizacje nie zostaną zmienione.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -241,11 +318,7 @@ class ResultsBrowser(QDialog):
         try:
             deleted = cleanup.clear_results(self.MODULE_ID, self.RESULT_KEY, self.selected_root)
             self.load_folder(self.selected_root)
-            QMessageBox.information(
-                self,
-                "Clear results",
-                f"Usunięto {deleted} wyników Color Analysis. Możesz teraz uruchomić analizę ponownie.",
-            )
+            QMessageBox.information(self, "Clear results", f"Usunięto {deleted} wyników Color Analysis. Możesz teraz uruchomić analizę ponownie.")
         except Exception as exc:
             QMessageBox.critical(self, "Clear results", str(exc))
 
@@ -302,12 +375,7 @@ class ResultsBrowser(QDialog):
         if not self.rows:
             QMessageBox.information(self, "Export CSV", "Najpierw wybierz folder z wynikami.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export results",
-            "color-analysis-results.csv",
-            "CSV files (*.csv)",
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Export results", "color-analysis-results.csv", "CSV files (*.csv)")
         if not path:
             return
         visible = self._current_visible_rows()
@@ -316,13 +384,13 @@ class ResultsBrowser(QDialog):
                 writer = csv.writer(handle, delimiter=";")
                 writer.writerow([
                     "path", "sha512", "size", "is_bw", "is_mostly_bw",
-                    "is_monochrome", "is_mostly_monochrome", "has_result",
+                    "is_monochrome", "is_mostly_monochrome", "manual_review", "has_result",
                 ])
                 for row in visible:
                     writer.writerow([
                         row["path"], row["sha512"], row["size"], row["bw"],
                         row["mostly_bw"], row["monochrome"], row["mostly_monochrome"],
-                        row["has_result"],
+                        row["manual_review"] or "", row["has_result"],
                     ])
             QMessageBox.information(self, "Export CSV", f"Wyniki zapisano do:\n{path}")
         except OSError as exc:
