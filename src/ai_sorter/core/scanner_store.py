@@ -23,6 +23,9 @@ class ScannerStore:
         self.connection.execute(
             "CREATE TEMP TABLE IF NOT EXISTS scanner_seen_paths (absolute_path TEXT PRIMARY KEY)"
         )
+        self.connection.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS scanner_clear_shas (sha512 TEXT PRIMARY KEY)"
+        )
         self.connection.commit()
 
     def _ensure_last_seen_column(self) -> None:
@@ -195,25 +198,31 @@ class ScannerStore:
     def clear_folder(self, root: Path) -> tuple[int, int]:
         """Remove Scanner-owned locations under root and orphaned file identities.
 
-        File records that still have another active location are preserved. Because
-        analysis_result references file_record with ON DELETE CASCADE, only orphaned
-        identities lose their module results as a consequence of this cleanup.
+        A temporary SHA table is used instead of a giant ``IN (?, ?, ...)`` list,
+        so clearing large roots is not limited by SQLite's bind-parameter limit.
+        File records that still have another location are preserved.
         """
         root_text = str(root.resolve()).rstrip("\\/")
         pattern = root_text + "\\%"
         try:
             with self.database.transaction() as connection:
-                location_rows = connection.execute(
+                connection.execute("DELETE FROM scanner_clear_shas")
+                connection.execute(
                     """
+                    INSERT OR IGNORE INTO scanner_clear_shas (sha512)
                     SELECT DISTINCT sha512
                     FROM file_location
                     WHERE location_status IN ('ACTIVE', 'MISSING')
                       AND (absolute_path = ? OR absolute_path LIKE ?)
                     """,
                     (root_text, pattern),
-                ).fetchall()
-                shas = [str(row["sha512"]) for row in location_rows]
-                if not shas:
+                )
+                affected = int(
+                    connection.execute(
+                        "SELECT COUNT(*) AS count FROM scanner_clear_shas"
+                    ).fetchone()["count"]
+                )
+                if affected == 0:
                     return 0, 0
 
                 connection.execute(
@@ -224,18 +233,22 @@ class ScannerStore:
                     """,
                     (root_text, pattern),
                 )
-                placeholders = ",".join("?" for _ in shas)
                 orphan_cursor = connection.execute(
-                    f"""
+                    """
                     DELETE FROM file_record
-                    WHERE sha512 IN ({placeholders})
-                      AND NOT EXISTS (
-                          SELECT 1 FROM file_location fl WHERE fl.sha512 = file_record.sha512
-                      )
-                    """,
-                    tuple(shas),
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM scanner_clear_shas scs
+                        WHERE scs.sha512 = file_record.sha512
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM file_location fl
+                        WHERE fl.sha512 = file_record.sha512
+                    )
+                    """
                 )
-                return len(shas), max(0, orphan_cursor.rowcount or 0)
+                return affected, max(0, orphan_cursor.rowcount or 0)
         except Exception as exc:
             raise DatabaseError(
                 "Nie udało się wyczyścić wyników Scanner dla wybranego folderu. "
