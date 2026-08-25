@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .core.alldup_importer import AllDupImporter
+from .core.alldup_importer_fast import AllDupImporterFast
 
 
 def main() -> int:
@@ -17,13 +17,15 @@ def main() -> int:
     parser.add_argument("alldup", type=Path, help="Ścieżka do checksum.adb")
     parser.add_argument("project", type=Path, help="Ścieżka do project.db")
     parser.add_argument("--sample", type=int, default=None, help="Ogranicz liczbę sprawdzanych lokalizacji")
+    parser.add_argument("--allow-suffix", action="store_true", help="Użyj wolniejszego dopasowania pod innym rootem dla nieznalezionych ścieżek")
     parser.add_argument("--apply", action="store_true", help="Zapisz potwierdzone checksumy do external_hash_cache")
     args = parser.parse_args()
 
     try:
-        stats = AllDupImporter(args.alldup, args.project).run(
+        stats = AllDupImporterFast(args.alldup, args.project).run(
             sample_size=args.sample,
             apply=args.apply,
+            allow_suffix=args.allow_suffix,
         )
     except (ValueError, RuntimeError) as exc:
         print(f"Błąd: {exc}")
@@ -42,6 +44,7 @@ def main() -> int:
     print(f"Cacheable matches: {stats.cacheable}")
     print(f"Imported to cache: {stats.imported}")
     print()
+    print(f"Suffix fallback: {'ENABLED' if args.allow_suffix else 'DISABLED'}")
     if args.apply:
         print("Mode: APPLY — external_hash_cache was updated; canonical Scanner SHA512 records were not overwritten.")
     else:
