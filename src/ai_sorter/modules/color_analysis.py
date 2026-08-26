@@ -21,19 +21,21 @@ ProgressCallback = Callable[["ColorProgress"], None]
 
 @dataclass(frozen=True, slots=True)
 class ColorAnalysisConfig:
-    """Deterministic thresholds for the second-generation colour classifier."""
+    """Deterministic thresholds for the strict colour classifier."""
 
-    sample_longest_side: int = 256
+    # Larger sample reduces the chance that a small coloured detail disappears
+    # during downsampling, while keeping the operation inexpensive.
+    sample_longest_side: int = 512
     bw_channel_delta: int = 12
     bw_ratio: float = 0.995
-    mostly_bw_ratio: float = 0.97
+
+    # Disabled in v0.3: they caused too many borderline classifications.
+    mostly_bw_ratio: float = 1.0
     saturation_floor: float = 0.18
     minimum_saturated_ratio: float = 0.12
     hue_bins: int = 24
     monochrome_family_ratio: float = 0.90
-    mostly_monochrome_family_ratio: float = 0.75
     monochrome_secondary_max_ratio: float = 0.08
-    mostly_monochrome_secondary_max_ratio: float = 0.20
     hue_window_bins: int = 3
     significant_family_ratio: float = 0.08
 
@@ -74,7 +76,7 @@ class ColorAnalysis:
     """Analyse image colour characteristics and persist module-owned results."""
 
     module_id = "color_analysis"
-    module_version = "0.2.0"
+    module_version = "0.3.0"
     result_key = "color_analysis"
 
     def __init__(
@@ -228,9 +230,8 @@ class ColorAnalysis:
         return processed, failed
 
     def _persist_batch(self, results: list[_Result], execution_id: int) -> None:
-        connection = self.database.connection
-        if connection is None:
-            raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
+        if not results:
+            return
         try:
             with self.database.transaction() as connection:
                 connection.executemany(
@@ -267,7 +268,6 @@ class ColorAnalysis:
 
     def _analyse_target(self, target: _Target) -> _Result:
         try:
-            # Pillow is deliberately loaded only when Color Analysis actually runs.
             from PIL import Image, ImageOps
         except ImportError as exc:
             raise RuntimeError(
@@ -347,8 +347,10 @@ class ColorAnalysis:
                 if weight / total_hue_weight >= config.significant_family_ratio
             )
 
+        # v0.3 deliberately keeps only strict BW and strict monochrome.
+        # Borderline "mostly" categories are disabled rather than guessed.
         is_bw = gray_ratio >= config.bw_ratio
-        is_mostly_bw = (not is_bw) and gray_ratio >= config.mostly_bw_ratio
+        is_mostly_bw = False
 
         colorful_enough = saturated_ratio >= config.minimum_saturated_ratio
         is_monochrome = (
@@ -358,20 +360,13 @@ class ColorAnalysis:
             and secondary_color_ratio <= config.monochrome_secondary_max_ratio
             and significant_family_count <= 1
         )
-        is_mostly_monochrome = (
-            (not is_bw)
-            and (not is_monochrome)
-            and colorful_enough
-            and dominant_family_ratio >= config.mostly_monochrome_family_ratio
-            and secondary_color_ratio <= config.mostly_monochrome_secondary_max_ratio
-            and significant_family_count <= 2
-        )
+        is_mostly_monochrome = False
 
         payload = {
             "is_bw": is_bw,
-            "is_mostly_bw": is_mostly_bw,
+            "is_mostly_bw": False,
             "is_monochrome": is_monochrome,
-            "is_mostly_monochrome": is_mostly_monochrome,
+            "is_mostly_monochrome": False,
             "gray_ratio": round(gray_ratio, 6),
             "saturated_ratio": round(saturated_ratio, 6),
             "dominant_hue_family_ratio": round(dominant_family_ratio, 6),
@@ -385,14 +380,13 @@ class ColorAnalysis:
                 "sample_longest_side": config.sample_longest_side,
                 "bw_channel_delta": config.bw_channel_delta,
                 "bw_ratio": config.bw_ratio,
-                "mostly_bw_ratio": config.mostly_bw_ratio,
+                "mostly_bw_enabled": False,
                 "saturation_floor": config.saturation_floor,
                 "minimum_saturated_ratio": config.minimum_saturated_ratio,
                 "hue_bins": config.hue_bins,
                 "monochrome_family_ratio": config.monochrome_family_ratio,
-                "mostly_monochrome_family_ratio": config.mostly_monochrome_family_ratio,
                 "monochrome_secondary_max_ratio": config.monochrome_secondary_max_ratio,
-                "mostly_monochrome_secondary_max_ratio": config.mostly_monochrome_secondary_max_ratio,
+                "mostly_monochrome_enabled": False,
                 "hue_window_bins": config.hue_window_bins,
                 "significant_family_ratio": config.significant_family_ratio,
             },
