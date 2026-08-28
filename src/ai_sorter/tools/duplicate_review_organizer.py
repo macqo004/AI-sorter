@@ -1,9 +1,4 @@
-"""Physically move SHA-512 duplicate groups into a temporary review tree.
-
-The tool reads the AllDup database read-only. It never copies file bytes: files are
-moved with os.replace semantics on the same filesystem. By default it performs a
-dry-run. Use --apply to execute moves.
-"""
+"""Streamingly organize SHA-512 duplicate groups into a review tree."""
 from __future__ import annotations
 
 import argparse
@@ -38,7 +33,7 @@ class OrganizeStats:
 
 
 class DuplicateReviewOrganizer:
-    """Find SHA-512 duplicate groups in AllDup and move them together."""
+    """Find SHA-512 duplicate groups in AllDup and process them one group at a time."""
 
     def __init__(self, alldup_path: Path, source_root: Path, destination_root: Path) -> None:
         self.alldup_path = alldup_path.resolve()
@@ -63,50 +58,60 @@ class DuplicateReviewOrganizer:
                 "Dry-run również wymaga pustego folderu docelowego."
             )
 
-        groups = self._load_duplicate_groups(limit_groups)
-        all_files = [item for group in groups for item in group]
-        existing_files = [item for item in all_files if item.source.is_file()]
-        missing_files = len(all_files) - len(existing_files)
-
-        collisions = 0
-        moved_files = 0
-        failed_moves = 0
-        manifest_rows: list[tuple[str, str, str, int]] = []
-
-        for group_number, group in enumerate(groups, start=1):
-            target_dir = self.destination_root / str(group_number)
-            planned_names: set[str] = set()
-            used_names = {item.source.name.lower() for item in group if item.source.is_file()}
-
-            if apply:
-                target_dir.mkdir(parents=True, exist_ok=True)
-
-            for item in group:
-                if not item.source.is_file():
-                    continue
-                target = self._unique_target(target_dir, item.source.name, planned_names)
-                if target.name != item.source.name:
-                    collisions += 1
-                planned_names.add(target.name.lower())
-
-                if apply:
-                    try:
-                        os.replace(item.source, target)
-                        moved_files += 1
-                        manifest_rows.append((item.sha512, str(item.source), str(target), item.size))
-                    except OSError as exc:
-                        failed_moves += 1
-                        manifest_rows.append((item.sha512, str(item.source), f"ERROR: {exc}", item.size))
-                else:
-                    manifest_rows.append((item.sha512, str(item.source), str(target), item.size))
+        groups = files = existing_files = missing_files = collisions = moved_files = failed_moves = 0
+        manifest_stream = None
+        manifest_writer = None
 
         if apply:
-            self._write_manifest(manifest_rows)
+            manifest_path = self.destination_root / "manifest.csv"
+            manifest_stream = manifest_path.open("w", encoding="utf-8-sig", newline="")
+            manifest_writer = csv.writer(manifest_stream, delimiter=";")
+            manifest_writer.writerow(["sha512", "source_path", "destination_path", "file_size"])
+            manifest_stream.flush()
+
+        try:
+            for group in self._iter_duplicate_groups(limit_groups):
+                groups += 1
+                files += len(group)
+                for item in group:
+                    if item.source.is_file():
+                        existing_files += 1
+                    else:
+                        missing_files += 1
+
+                target_dir = self.destination_root / str(groups)
+                planned_names: set[str] = set()
+                if apply:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+
+                for item in group:
+                    if not item.source.is_file():
+                        continue
+                    target = self._unique_target(target_dir, item.source.name, planned_names)
+                    if target.name != item.source.name:
+                        collisions += 1
+                    planned_names.add(target.name.lower())
+
+                    if apply:
+                        try:
+                            os.replace(item.source, target)
+                            moved_files += 1
+                            assert manifest_writer is not None
+                            manifest_writer.writerow((item.sha512, str(item.source), str(target), item.size))
+                        except OSError as exc:
+                            failed_moves += 1
+                            assert manifest_writer is not None
+                            manifest_writer.writerow((item.sha512, str(item.source), f"ERROR: {exc}", item.size))
+                if manifest_stream is not None:
+                    manifest_stream.flush()
+        finally:
+            if manifest_stream is not None:
+                manifest_stream.close()
 
         return OrganizeStats(
-            groups=len(groups),
-            files=len(all_files),
-            existing_files=len(existing_files),
+            groups=groups,
+            files=files,
+            existing_files=existing_files,
             missing_files=missing_files,
             collisions=collisions,
             moved_files=moved_files,
@@ -137,7 +142,8 @@ class DuplicateReviewOrganizer:
         connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
-    def _load_duplicate_groups(self, limit_groups: int | None) -> list[list[DuplicateFile]]:
+    def _iter_duplicate_groups(self, limit_groups: int | None):
+        """Yield duplicate groups one at a time; never materialize the whole database result."""
         root = str(self.source_root).rstrip("\\/")
         prefix = root + "\\%"
         limit_clause = " LIMIT ?" if limit_groups is not None else ""
@@ -147,9 +153,10 @@ class DuplicateReviewOrganizer:
             params: list[object] = [ALLDUP_SHA512_CTYPE, root, prefix]
             if limit_groups is not None:
                 params.append(int(limit_groups))
-            group_rows = connection.execute(
+
+            group_cursor = connection.execute(
                 f"""
-                SELECT h.checksum AS checksum, COUNT(*) AS cnt
+                SELECT h.checksum AS checksum
                 FROM files f
                 JOIN hashc h
                   ON h.fileid = f.id
@@ -161,16 +168,15 @@ class DuplicateReviewOrganizer:
                 {limit_clause}
                 """,
                 tuple(params),
-            ).fetchall()
+            )
 
-            result: list[list[DuplicateFile]] = []
-            for row in group_rows:
-                checksum_blob = row["checksum"]
+            for group_row in group_cursor:
+                checksum_blob = group_row["checksum"]
                 sha512 = self._normalize_sha512(checksum_blob)
                 if not sha512:
                     continue
 
-                file_rows = connection.execute(
+                file_cursor = connection.execute(
                     """
                     SELECT f.file AS absolute_path, h.fsize AS file_size
                     FROM files f
@@ -182,31 +188,23 @@ class DuplicateReviewOrganizer:
                     ORDER BY f.file
                     """,
                     (ALLDUP_SHA512_CTYPE, root, prefix, checksum_blob),
-                ).fetchall()
-
+                )
                 group = [
                     DuplicateFile(
                         sha512=sha512,
                         source=Path(str(item["absolute_path"])),
                         size=int(item["file_size"] or 0),
                     )
-                    for item in file_rows
+                    for item in file_cursor
                 ]
                 if len(group) >= 2:
-                    result.append(group)
-            return result
+                    yield group
         finally:
             connection.close()
 
-    def _write_manifest(self, rows: list[tuple[str, str, str, int]]) -> None:
-        manifest_path = self.destination_root / "manifest.csv"
-        with manifest_path.open("w", encoding="utf-8-sig", newline="") as stream:
-            writer = csv.writer(stream, delimiter=";")
-            writer.writerow(["sha512", "source_path", "destination_path", "file_size"])
-            writer.writerows(rows)
-
     @staticmethod
     def _unique_target(directory: Path, filename: str, planned_names: set[str]) -> Path:
+        """Return a short collision-safe name such as foo.jpg, foo_1.jpg, foo_2.jpg."""
         stem = Path(filename).stem
         suffix = Path(filename).suffix
         target = directory / filename
