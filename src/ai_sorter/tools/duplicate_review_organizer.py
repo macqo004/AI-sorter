@@ -1,13 +1,16 @@
 """Streamingly organize SHA-512 duplicate groups from the entire AllDup database.
 
 The AllDup database is read-only. By default this is a dry-run; --apply physically
-moves files into numbered review folders. No copy of image bytes is made.
+moves files into numbered review folders. Cross-volume moves use copy + SHA-512
+verification + source deletion, so a failed verification never destroys the source.
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -16,6 +19,7 @@ from pathlib import Path
 from typing import Iterator
 
 ALLDUP_SHA512_CTYPE = 5
+COPY_BUFFER_SIZE = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +38,7 @@ class OrganizeStats:
     collisions: int
     moved_files: int
     failed_moves: int
+    verified_moves: int
     elapsed_seconds: float
 
 
@@ -56,7 +61,7 @@ class DuplicateReviewOrganizer:
         if apply:
             self.destination_root.mkdir(parents=True, exist_ok=True)
 
-        groups = files = existing_files = missing_files = collisions = moved_files = failed_moves = 0
+        groups = files = existing_files = missing_files = collisions = moved_files = failed_moves = verified_moves = 0
         manifest_stream = None
         manifest_writer = None
 
@@ -64,7 +69,7 @@ class DuplicateReviewOrganizer:
             manifest_path = self.destination_root / "manifest.csv"
             manifest_stream = manifest_path.open("w", encoding="utf-8-sig", newline="")
             manifest_writer = csv.writer(manifest_stream, delimiter=";")
-            manifest_writer.writerow(["sha512", "source_path", "destination_path", "file_size"])
+            manifest_writer.writerow(["sha512", "source_path", "destination_path", "file_size", "status"])
             manifest_stream.flush()
 
         try:
@@ -77,33 +82,38 @@ class DuplicateReviewOrganizer:
                     else:
                         missing_files += 1
 
+                existing_items = [item for item in group if item.source.is_file()]
+                if not existing_items:
+                    continue
+
                 target_dir = self.destination_root / str(groups)
                 if apply:
                     target_dir.mkdir(parents=True, exist_ok=True)
                 planned_names: set[str] = set()
 
-                for item in group:
-                    if not item.source.is_file():
-                        continue
+                for item in existing_items:
                     target = self._unique_target(target_dir, item.source.name, planned_names)
                     if target.name.lower() != item.source.name.lower():
                         collisions += 1
                     planned_names.add(target.name.lower())
 
-                    if apply:
-                        try:
-                            os.replace(item.source, target)
-                            moved_files += 1
-                            assert manifest_writer is not None
-                            manifest_writer.writerow(
-                                (item.sha512, str(item.source), str(target), item.size)
-                            )
-                        except OSError as exc:
-                            failed_moves += 1
-                            assert manifest_writer is not None
-                            manifest_writer.writerow(
-                                (item.sha512, str(item.source), f"ERROR: {exc}", item.size)
-                            )
+                    if not apply:
+                        continue
+
+                    try:
+                        self._move_verified_cross_volume(item, target)
+                        moved_files += 1
+                        verified_moves += 1
+                        assert manifest_writer is not None
+                        manifest_writer.writerow(
+                            (item.sha512, str(item.source), str(target), item.size, "MOVED_VERIFIED")
+                        )
+                    except (OSError, RuntimeError) as exc:
+                        failed_moves += 1
+                        assert manifest_writer is not None
+                        manifest_writer.writerow(
+                            (item.sha512, str(item.source), f"ERROR: {exc}", item.size, "FAILED_SOURCE_PRESERVED")
+                        )
 
                 if manifest_stream is not None:
                     manifest_stream.flush()
@@ -119,12 +129,15 @@ class DuplicateReviewOrganizer:
             collisions=collisions,
             moved_files=moved_files,
             failed_moves=failed_moves,
+            verified_moves=verified_moves,
             elapsed_seconds=time.perf_counter() - started,
         )
 
     def _validate_paths(self) -> None:
         if not self.alldup_path.is_file():
             raise ValueError(f"Nie znaleziono bazy AllDup: {self.alldup_path}")
+        if self.destination_root.exists() and self.destination_root.is_file():
+            raise ValueError(f"Folder docelowy jest plikiem: {self.destination_root}")
 
     def _open_alldup(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -137,8 +150,6 @@ class DuplicateReviewOrganizer:
 
     def _iter_duplicate_groups(self, limit_groups: int | None) -> Iterator[list[DuplicateFile]]:
         """Yield groups without materializing all groups or files in Python memory."""
-        # Read rows ordered by checksum so one checksum group is contiguous.
-        # SQLite may use a temporary on-disk sort, but Python memory stays bounded.
         connection = self._open_alldup()
         try:
             cursor = connection.execute(
@@ -216,6 +227,61 @@ class DuplicateReviewOrganizer:
             return ""
         return digest
 
+    @staticmethod
+    def _sha512_file(path: Path) -> str:
+        digest = hashlib.sha512()
+        with path.open("rb", buffering=COPY_BUFFER_SIZE) as stream:
+            for chunk in iter(lambda: stream.read(COPY_BUFFER_SIZE), b""):
+                digest.update(chunk)
+        return digest.hexdigest().lower()
+
+    def _move_verified_cross_volume(self, item: DuplicateFile, target: Path) -> None:
+        """Move safely across volumes: copy to temp, verify SHA-512, then delete source."""
+        source = item.source
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        # Same-volume move: this is a real filesystem move and needs no copy.
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            # Windows ERROR_NOT_SAME_DEVICE is winerror 17.
+            # Only that condition is allowed to fall back to cross-volume transfer.
+            if getattr(exc, "winerror", None) != 17 and exc.errno != 18:
+                raise
+
+        temp_target = target.with_name(target.name + ".ai-sorter-partial")
+        temp_target.unlink(missing_ok=True)
+
+        try:
+            shutil.copyfile(source, temp_target)
+
+            actual_size = temp_target.stat().st_size
+            if actual_size != item.size:
+                raise RuntimeError(
+                    f"Rozmiar pliku docelowego ({actual_size}) nie zgadza się z AllDup ({item.size})."
+                )
+
+            destination_sha512 = self._sha512_file(temp_target)
+            if destination_sha512 != item.sha512:
+                raise RuntimeError(
+                    "SHA-512 pliku docelowego nie zgadza się z checksumem AllDup; źródło pozostawiono bez zmian."
+                )
+
+            # Finalize the destination only after successful verification.
+            os.replace(temp_target, target)
+
+            # Only now remove the source. If removal fails, report failure rather
+            # than pretending the operation completed as a true move.
+            try:
+                source.unlink()
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Cel został zweryfikowany, ale nie udało się usunąć źródła: {exc}"
+                ) from exc
+        finally:
+            temp_target.unlink(missing_ok=True)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -247,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Missing source files: {stats.missing_files}")
     print(f"Filename collisions resolved with _N: {stats.collisions}")
     print(f"Moved files: {stats.moved_files}")
+    print(f"Verified moves: {stats.verified_moves}")
     print(f"Failed moves: {stats.failed_moves}")
     print(f"Elapsed: {stats.elapsed_seconds:.3f}s")
     if stats.elapsed_seconds > 0:
