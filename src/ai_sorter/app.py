@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from .core.compute import detect_compute_backend
 from .core.database import Database, DatabaseError
 from .core.paths import AppPaths
-from .gui.main_window import MainWindow
+from .gui.main_window_v2 import MainWindow
 
 
 class Application:
