@@ -5,8 +5,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import QThread, QTimer, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QFormLayout,
     QFileDialog,
     QLabel,
@@ -179,12 +180,11 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._set_module_controls_enabled(False)
+        self.scan_details.setText("Checking all active file locations…")
+        self.statusBar().showMessage("Checking all file locations…")
         try:
-            self._set_module_controls_enabled(False)
-            QApplication = __import__("PySide6.QtWidgets", fromlist=["QApplication"]).QApplication
-            QApplication.setOverrideCursor(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.WaitCursor)
-            self.scan_details.setText("Checking all active file locations…")
-            self.statusBar().showMessage("Checking all file locations…")
             checked, missing = ScannerStore(self.database).check_all_locations()
             self._refresh_database_status()
             self.scan_details.setText(
@@ -199,10 +199,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "File location check", str(exc))
         finally:
-            try:
-                QApplication.restoreOverrideCursor()
-            except Exception:
-                pass
+            QApplication.restoreOverrideCursor()
             self._set_module_controls_enabled(True)
 
     def cleanup_inactive_data(self) -> None:
@@ -216,10 +213,10 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
+        self._set_module_controls_enabled(False)
+        self.scan_details.setText("Cleaning inactive Scanner data…")
+        self.statusBar().showMessage("Cleaning inactive Scanner data…")
         try:
-            self._set_module_controls_enabled(False)
-            self.scan_details.setText("Cleaning inactive Scanner data…")
-            self.statusBar().showMessage("Cleaning inactive Scanner data…")
             removed_locations, removed_records = ScannerStore(self.database).cleanup_inactive()
             self._refresh_database_status()
             self.scan_details.setText(
