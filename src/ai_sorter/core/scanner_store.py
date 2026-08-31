@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ class ScannerStore:
     """Thin persistence adapter for Scanner-specific synchronization state."""
 
     LOOKUP_BATCH_SIZE = 500
+    CLEANUP_BATCH_SIZE = 1000
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -252,6 +254,81 @@ class ScannerStore:
         except Exception as exc:
             raise DatabaseError(
                 "Nie udało się wyczyścić wyników Scanner dla wybranego folderu. "
+                "Pliki kolekcji nie zostały zmienione."
+            ) from exc
+
+    def check_all_locations(self) -> tuple[int, int]:
+        """Check all ACTIVE Scanner locations using filesystem metadata only.
+
+        Returns (checked, marked_missing). No file contents are read and no SHA-512 is recalculated.
+        """
+        checked = missing = 0
+        try:
+            cursor = self.connection.execute(
+                "SELECT absolute_path FROM file_location WHERE location_status = 'ACTIVE'"
+            )
+            missing_paths: list[str] = []
+            for row in cursor:
+                path = Path(str(row["absolute_path"]))
+                checked += 1
+                try:
+                    exists = path.is_file()
+                except OSError:
+                    exists = False
+                if not exists:
+                    missing_paths.append(str(path))
+                    if len(missing_paths) >= self.CLEANUP_BATCH_SIZE:
+                        missing += self._mark_missing_batch(missing_paths)
+                        missing_paths.clear()
+            if missing_paths:
+                missing += self._mark_missing_batch(missing_paths)
+            return checked, missing
+        except Exception as exc:
+            raise DatabaseError(
+                "Nie udało się sprawdzić aktualności lokalizacji plików."
+            ) from exc
+
+    def _mark_missing_batch(self, paths: list[str]) -> int:
+        if not paths:
+            return 0
+        with self.database.transaction() as connection:
+            connection.executemany(
+                "UPDATE file_location SET location_status = 'MISSING' WHERE absolute_path = ? AND location_status = 'ACTIVE'",
+                [(path,) for path in paths],
+            )
+        return len(paths)
+
+    def cleanup_inactive(self) -> tuple[int, int]:
+        """Delete MISSING locations and then delete file identities with no remaining locations."""
+        removed_locations = 0
+        removed_records = 0
+        try:
+            with self.database.transaction() as connection:
+                cursor = connection.execute(
+                    "DELETE FROM file_location WHERE location_status <> 'ACTIVE'"
+                )
+                removed_locations = max(0, cursor.rowcount or 0)
+
+                # Repeat in batches to keep transaction and WAL sizes reasonable.
+                while True:
+                    cursor = connection.execute(
+                        f"""
+                        DELETE FROM file_record
+                        WHERE status = 'ACTIVE'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM file_location fl WHERE fl.sha512 = file_record.sha512
+                          )
+                        LIMIT {self.CLEANUP_BATCH_SIZE}
+                        """
+                    )
+                    count = max(0, cursor.rowcount or 0)
+                    removed_records += count
+                    if count < self.CLEANUP_BATCH_SIZE:
+                        break
+                return removed_locations, removed_records
+        except Exception as exc:
+            raise DatabaseError(
+                "Nie udało się usunąć nieaktywnych danych Scanner. "
                 "Pliki kolekcji nie zostały zmienione."
             ) from exc
 
