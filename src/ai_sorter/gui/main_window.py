@@ -23,6 +23,7 @@ from ..core.alldup_inspector import AllDupDatabaseInspector
 from ..core.compute import ComputeBackend
 from ..core.database import Database
 from ..core.models import DatabaseStatus
+from ..core.scanner_store import ScannerStore
 from ..modules.color_analysis import ColorAnalysis, ColorProgress, ColorSummary
 from ..modules.scanner import Scanner, ScanProgress, ScanSummary
 from .color_analysis_worker import ColorAnalysisWorker
@@ -31,7 +32,7 @@ from .scanner_worker import ScannerWorker
 
 
 class MainWindow(QMainWindow):
-    """Foundation GUI with Scanner, Color Analysis, results browsing and AllDup inspection."""
+    """Foundation GUI with Scanner, Color Analysis, cleanup tools and result browsing."""
 
     def __init__(self, project_path: Path, database: Database, database_status: DatabaseStatus, compute_backend: ComputeBackend) -> None:
         super().__init__()
@@ -52,7 +53,7 @@ class MainWindow(QMainWindow):
         self.elapsed_timer.setInterval(1000)
         self.elapsed_timer.timeout.connect(self._refresh_live_elapsed)
         self.setWindowTitle("AI-Sorter")
-        self.resize(920, 950)
+        self.resize(920, 1050)
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
@@ -89,6 +90,14 @@ class MainWindow(QMainWindow):
         self.color_cancel_button.setEnabled(False)
         self.color_cancel_button.clicked.connect(self.cancel_color_analysis)
         layout.addWidget(self.color_cancel_button)
+
+        self.check_locations_button = QPushButton("Check all file locations", central)
+        self.check_locations_button.clicked.connect(self.check_all_locations)
+        layout.addWidget(self.check_locations_button)
+        self.cleanup_inactive_button = QPushButton("Clean inactive Scanner data…", central)
+        self.cleanup_inactive_button.clicked.connect(self.cleanup_inactive_data)
+        layout.addWidget(self.cleanup_inactive_button)
+
         self.results_button = QPushButton("Browse database results…", central)
         self.results_button.clicked.connect(self.browse_results)
         layout.addWidget(self.results_button)
@@ -121,6 +130,8 @@ class MainWindow(QMainWindow):
     def _set_module_controls_enabled(self, enabled: bool) -> None:
         self.scan_button.setEnabled(enabled)
         self.color_button.setEnabled(enabled)
+        self.check_locations_button.setEnabled(enabled)
+        self.cleanup_inactive_button.setEnabled(enabled)
         self.results_button.setEnabled(enabled)
         self.alldup_button.setEnabled(enabled)
 
@@ -156,6 +167,77 @@ class MainWindow(QMainWindow):
             dialog.exec()
         except Exception as exc:
             QMessageBox.critical(self, "AllDup database inspection", str(exc))
+
+    def check_all_locations(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Check all file locations",
+            "Sprawdzić istnienie wszystkich aktywnych lokalizacji plików w bazie?\n\n"
+            "Operacja nie czyta zawartości plików i nie przelicza SHA-512.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            self._set_module_controls_enabled(False)
+            QApplication = __import__("PySide6.QtWidgets", fromlist=["QApplication"]).QApplication
+            QApplication.setOverrideCursor(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.WaitCursor)
+            self.scan_details.setText("Checking all active file locations…")
+            self.statusBar().showMessage("Checking all file locations…")
+            checked, missing = ScannerStore(self.database).check_all_locations()
+            self._refresh_database_status()
+            self.scan_details.setText(
+                f"Location check finished.\n\nChecked: {checked}\nMarked missing: {missing}"
+            )
+            self.statusBar().showMessage("File location check finished.")
+            QMessageBox.information(
+                self,
+                "File location check",
+                f"Sprawdzono lokalizacje: {checked}\nOznaczono jako MISSING: {missing}",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "File location check", str(exc))
+        finally:
+            try:
+                QApplication.restoreOverrideCursor()
+            except Exception:
+                pass
+            self._set_module_controls_enabled(True)
+
+    def cleanup_inactive_data(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Clean inactive Scanner data",
+            "Usunąć z bazy wszystkie nieaktywne lokalizacje oraz osierocone rekordy plików?\n\n"
+            "Ta operacja NIE usuwa żadnych plików z dysku.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            self._set_module_controls_enabled(False)
+            self.scan_details.setText("Cleaning inactive Scanner data…")
+            self.statusBar().showMessage("Cleaning inactive Scanner data…")
+            removed_locations, removed_records = ScannerStore(self.database).cleanup_inactive()
+            self._refresh_database_status()
+            self.scan_details.setText(
+                "Inactive data cleanup finished.\n\n"
+                f"Removed locations: {removed_locations}\n"
+                f"Removed orphan file records: {removed_records}"
+            )
+            self.statusBar().showMessage("Inactive Scanner data cleanup finished.")
+            QMessageBox.information(
+                self,
+                "Inactive Scanner data",
+                f"Usunięte lokalizacje: {removed_locations}\n"
+                f"Usunięte osierocone rekordy plików: {removed_records}",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Inactive Scanner data", str(exc))
+        finally:
+            self._set_module_controls_enabled(True)
 
     def start_scan(self, root: Path) -> None:
         self.close_after_scan = False
@@ -361,43 +443,3 @@ class MainWindow(QMainWindow):
             self.color_worker.deleteLater()
         self.color_thread = None
         self.color_worker = None
-
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self.scanner_worker and self.scanner_thread and self.scanner_thread.isRunning():
-            answer = QMessageBox.question(
-                self,
-                "Scanner is running",
-                "Skanowanie jest nadal w toku. Czy chcesz je bezpiecznie przerwać i zobaczyć podsumowanie?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer == QMessageBox.No:
-                event.ignore()
-                return
-            self.close_after_scan = True
-            self.scanner_worker.cancel()
-            self.cancel_button.setEnabled(False)
-            self.statusBar().showMessage("Cancelling scanner… Please wait for the final summary.")
-            event.ignore()
-            return
-
-        if self.color_worker and self.color_thread and self.color_thread.isRunning():
-            answer = QMessageBox.question(
-                self,
-                "Color Analysis is running",
-                "Color Analysis jest nadal w toku. Czy chcesz je bezpiecznie przerwać i zobaczyć podsumowanie?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer == QMessageBox.No:
-                event.ignore()
-                return
-            self.close_after_color = True
-            self.color_worker.cancel()
-            self.color_cancel_button.setEnabled(False)
-            self.statusBar().showMessage("Cancelling Color Analysis… Please wait for the final summary.")
-            event.ignore()
-            return
-
-        self.elapsed_timer.stop()
-        event.accept()
