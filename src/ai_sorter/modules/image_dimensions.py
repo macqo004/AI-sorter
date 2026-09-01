@@ -59,7 +59,7 @@ class ImageDimensions:
     """Populate missing width/height metadata without hashing image contents."""
 
     module_id = "image_dimensions"
-    module_version = "0.1.1"
+    module_version = "0.1.2"
 
     def __init__(self, database: Database, worker_count: int = 0, batch_size: int = 256) -> None:
         self.database = database
@@ -159,7 +159,7 @@ class ImageDimensions:
               )
             """
         ).fetchone()
-        return int(row["count"])
+        return int(row["count"]) if row else 0
 
     def _targets(self) -> Iterable[_Target]:
         connection = self.database.connection
@@ -182,8 +182,11 @@ class ImageDimensions:
             sha = str(row["sha512"])
             path = Path(str(row["absolute_path"]))
             if sha != current_sha:
-                if current_sha is not None and chosen_path is not None:
-                    yield _Target(current_sha, chosen_path)
+                if current_sha is not None:
+                    # A SHA with no existing physical copy is reported as a failure below
+                    # by omitting it from targets; it remains in the DB for the maintenance checker.
+                    if chosen_path is not None:
+                        yield _Target(current_sha, chosen_path)
                 current_sha = sha
                 chosen_path = None
             if chosen_path is None:
@@ -211,7 +214,7 @@ class ImageDimensions:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
         try:
             with self.database.transaction() as db:
-                db.executemany(
+                cursor = db.executemany(
                     """
                     UPDATE file_record
                     SET width_px = ?, height_px = ?
@@ -219,7 +222,6 @@ class ImageDimensions:
                     """,
                     [(r.width_px, r.height_px, r.sha512) for r in results],
                 )
-                updated = db.execute("SELECT changes() AS count").fetchone()
-            return int(updated["count"]) if updated else 0
+                return max(0, cursor.rowcount or 0)
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać wymiarów obrazów w bazie danych.") from exc
