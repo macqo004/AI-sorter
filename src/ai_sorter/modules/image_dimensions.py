@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,14 +59,9 @@ class ImageDimensions:
     """Populate missing width/height metadata without hashing image contents."""
 
     module_id = "image_dimensions"
-    module_version = "0.1.0"
+    module_version = "0.1.1"
 
-    def __init__(
-        self,
-        database: Database,
-        worker_count: int = 0,
-        batch_size: int = 256,
-    ) -> None:
+    def __init__(self, database: Database, worker_count: int = 0, batch_size: int = 256) -> None:
         self.database = database
         self.worker_count = worker_count or max(1, min(8, (os.cpu_count() or 4) // 2 or 1))
         self.batch_size = max(32, batch_size)
@@ -79,19 +74,12 @@ class ImageDimensions:
         started_at = datetime.now(timezone.utc)
         started_perf = time.perf_counter()
         self._cancel_event.clear()
-        self.database.register_module(
-            ModuleRecord(
-                module_id=self.module_id,
-                display_name="Image Dimensions",
-                module_version=self.module_version,
-                enabled=True,
-            )
-        )
+        self.database.register_module(ModuleRecord(self.module_id, "Image Dimensions", self.module_version, True))
         execution_id = self.database.start_module_execution(self.module_id, started_at)
 
-        targets = list(self._targets())
-        total = len(targets)
-        considered = processed = updated = skipped = failed = 0
+        total = self._count_targets()
+        considered = total
+        processed = updated = skipped = failed = 0
         cancelled = False
         status = "FAILED"
         pending: dict[Future[_Result], _Target] = {}
@@ -99,21 +87,11 @@ class ImageDimensions:
 
         def emit(current_path: str | None = None) -> None:
             if progress_callback:
-                progress_callback(
-                    DimensionProgress(
-                        considered=total,
-                        processed=processed,
-                        updated=updated,
-                        skipped=skipped,
-                        failed=failed,
-                        total=total,
-                        current_path=current_path,
-                    )
-                )
+                progress_callback(DimensionProgress(considered, processed, updated, skipped, failed, total, current_path))
 
         try:
             with ThreadPoolExecutor(max_workers=self.worker_count, thread_name_prefix="dimensions") as executor:
-                for target in targets:
+                for target in self._targets():
                     if self._cancel_event.is_set():
                         cancelled = True
                         break
@@ -156,28 +134,32 @@ class ImageDimensions:
             status = "FAILED"
             raise
         finally:
-            self.database.finish_module_execution(
-                ModuleExecutionRecord(
-                    execution_id=execution_id,
-                    module_id=self.module_id,
-                    started_at=started_at,
-                    status=status,
-                    processed_count=processed,
-                    success_count=updated,
-                    failure_count=failed,
-                )
-            )
+            self.database.finish_module_execution(ModuleExecutionRecord(
+                execution_id, self.module_id, started_at, status, processed, updated, failed
+            ))
 
         return DimensionSummary(
-            execution_id=execution_id,
-            considered=considered,
-            processed=processed,
-            updated=updated,
-            skipped=skipped,
-            failed=failed,
-            cancelled=cancelled,
-            elapsed_seconds=time.perf_counter() - started_perf,
+            execution_id, considered, processed, updated, skipped, failed, cancelled,
+            time.perf_counter() - started_perf
         )
+
+    def _count_targets(self) -> int:
+        connection = self.database.connection
+        if connection is None:
+            raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM file_record AS f
+            WHERE f.status = 'ACTIVE'
+              AND (f.width_px IS NULL OR f.height_px IS NULL)
+              AND EXISTS (
+                  SELECT 1 FROM file_location AS fl
+                  WHERE fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+              )
+            """
+        ).fetchone()
+        return int(row["count"])
 
     def _targets(self) -> Iterable[_Target]:
         connection = self.database.connection
@@ -185,18 +167,33 @@ class ImageDimensions:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
         cursor = connection.execute(
             """
-            SELECT f.sha512, MIN(fl.absolute_path) AS absolute_path
+            SELECT f.sha512, fl.absolute_path
             FROM file_record AS f
             JOIN file_location AS fl
               ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
             WHERE f.status = 'ACTIVE'
               AND (f.width_px IS NULL OR f.height_px IS NULL)
-            GROUP BY f.sha512
-            ORDER BY f.sha512
+            ORDER BY f.sha512, fl.absolute_path
             """
         )
+        current_sha: str | None = None
+        chosen_path: Path | None = None
         for row in cursor:
-            yield _Target(str(row["sha512"]), Path(str(row["absolute_path"])))
+            sha = str(row["sha512"])
+            path = Path(str(row["absolute_path"]))
+            if sha != current_sha:
+                if current_sha is not None and chosen_path is not None:
+                    yield _Target(current_sha, chosen_path)
+                current_sha = sha
+                chosen_path = None
+            if chosen_path is None:
+                try:
+                    if path.is_file():
+                        chosen_path = path
+                except OSError:
+                    pass
+        if current_sha is not None and chosen_path is not None:
+            yield _Target(current_sha, chosen_path)
 
     @staticmethod
     def _read_dimensions(target: _Target) -> _Result:
@@ -220,8 +217,9 @@ class ImageDimensions:
                     SET width_px = ?, height_px = ?
                     WHERE sha512 = ? AND (width_px IS NULL OR height_px IS NULL)
                     """,
-                    [(result.width_px, result.height_px, result.sha512) for result in results],
+                    [(r.width_px, r.height_px, r.sha512) for r in results],
                 )
-            return len(results)
+                updated = db.execute("SELECT changes() AS count").fetchone()
+            return int(updated["count"]) if updated else 0
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać wymiarów obrazów w bazie danych.") from exc
