@@ -1,8 +1,9 @@
 """Streamingly organize SHA-512 duplicate groups from the entire AllDup database.
 
 The AllDup database is read-only. By default this is a dry-run; --apply physically
-moves files into numbered review folders. Cross-volume moves use copy + SHA-512
-verification + source deletion, so a failed verification never destroys the source.
+moves files into numbered review folders. Every move verifies the source against the
+AllDup SHA-512 before making the move. Cross-volume moves additionally verify the
+copied destination before deleting the source.
 """
 from __future__ import annotations
 
@@ -52,7 +53,6 @@ class DuplicateReviewOrganizer:
     def run(self, *, apply: bool = False, limit_groups: int | None = None) -> OrganizeStats:
         self._validate_paths()
         started = time.perf_counter()
-
         if self.destination_root.exists() and any(self.destination_root.iterdir()):
             raise ValueError(
                 f"Folder docelowy nie jest pusty: {self.destination_root}\n"
@@ -64,10 +64,8 @@ class DuplicateReviewOrganizer:
         groups = files = existing_files = missing_files = collisions = moved_files = failed_moves = verified_moves = 0
         manifest_stream = None
         manifest_writer = None
-
         if apply:
-            manifest_path = self.destination_root / "manifest.csv"
-            manifest_stream = manifest_path.open("w", encoding="utf-8-sig", newline="")
+            manifest_stream = (self.destination_root / "manifest.csv").open("w", encoding="utf-8-sig", newline="")
             manifest_writer = csv.writer(manifest_stream, delimiter=";")
             manifest_writer.writerow(["sha512", "source_path", "destination_path", "file_size", "status"])
             manifest_stream.flush()
@@ -76,13 +74,13 @@ class DuplicateReviewOrganizer:
             for group in self._iter_duplicate_groups(limit_groups):
                 groups += 1
                 files += len(group)
+                existing_items: list[DuplicateFile] = []
                 for item in group:
                     if item.source.is_file():
                         existing_files += 1
+                        existing_items.append(item)
                     else:
                         missing_files += 1
-
-                existing_items = [item for item in group if item.source.is_file()]
                 if not existing_items:
                     continue
 
@@ -90,48 +88,31 @@ class DuplicateReviewOrganizer:
                 if apply:
                     target_dir.mkdir(parents=True, exist_ok=True)
                 planned_names: set[str] = set()
-
                 for item in existing_items:
                     target = self._unique_target(target_dir, item.source.name, planned_names)
                     if target.name.lower() != item.source.name.lower():
                         collisions += 1
                     planned_names.add(target.name.lower())
-
                     if not apply:
                         continue
-
                     try:
-                        self._move_verified_cross_volume(item, target)
+                        self._move_verified(item, target)
                         moved_files += 1
                         verified_moves += 1
                         assert manifest_writer is not None
-                        manifest_writer.writerow(
-                            (item.sha512, str(item.source), str(target), item.size, "MOVED_VERIFIED")
-                        )
+                        manifest_writer.writerow((item.sha512, str(item.source), str(target), item.size, "MOVED_VERIFIED"))
                     except (OSError, RuntimeError) as exc:
                         failed_moves += 1
                         assert manifest_writer is not None
-                        manifest_writer.writerow(
-                            (item.sha512, str(item.source), f"ERROR: {exc}", item.size, "FAILED_SOURCE_PRESERVED")
-                        )
-
+                        manifest_writer.writerow((item.sha512, str(item.source), f"ERROR: {exc}", item.size, "FAILED_SOURCE_PRESERVED"))
                 if manifest_stream is not None:
                     manifest_stream.flush()
         finally:
             if manifest_stream is not None:
                 manifest_stream.close()
 
-        return OrganizeStats(
-            groups=groups,
-            files=files,
-            existing_files=existing_files,
-            missing_files=missing_files,
-            collisions=collisions,
-            moved_files=moved_files,
-            failed_moves=failed_moves,
-            verified_moves=verified_moves,
-            elapsed_seconds=time.perf_counter() - started,
-        )
+        return OrganizeStats(groups, files, existing_files, missing_files, collisions,
+                             moved_files, failed_moves, verified_moves, time.perf_counter() - started)
 
     def _validate_paths(self) -> None:
         if not self.alldup_path.is_file():
@@ -140,23 +121,18 @@ class DuplicateReviewOrganizer:
             raise ValueError(f"Folder docelowy jest plikiem: {self.destination_root}")
 
     def _open_alldup(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            f"file:{self.alldup_path.as_posix()}?mode=ro", uri=True, timeout=30
-        )
+        connection = sqlite3.connect(f"file:{self.alldup_path.as_posix()}?mode=ro", uri=True, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA query_only = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
     def _iter_duplicate_groups(self, limit_groups: int | None) -> Iterator[list[DuplicateFile]]:
-        """Yield groups without materializing all groups or files in Python memory."""
         connection = self._open_alldup()
         try:
             cursor = connection.execute(
                 """
-                SELECT h.checksum AS checksum,
-                       f.file AS absolute_path,
-                       h.fsize AS file_size
+                SELECT h.checksum AS checksum, f.file AS absolute_path, h.fsize AS file_size
                 FROM hashc AS h
                 JOIN files AS f ON f.id = h.fileid
                 WHERE h.ctype = ?
@@ -164,22 +140,14 @@ class DuplicateReviewOrganizer:
                 """,
                 (ALLDUP_SHA512_CTYPE,),
             )
-
             current_sha = ""
             current_group: list[DuplicateFile] = []
             groups_emitted = 0
-
             for row in cursor:
                 sha512 = self._normalize_sha512(row["checksum"])
                 if not sha512:
                     continue
-
-                item = DuplicateFile(
-                    sha512=sha512,
-                    source=Path(str(row["absolute_path"])),
-                    size=int(row["file_size"] or 0),
-                )
-
+                item = DuplicateFile(sha512, Path(str(row["absolute_path"])), int(row["file_size"] or 0))
                 if current_sha and sha512 != current_sha:
                     if len(current_group) >= 2:
                         yield current_group
@@ -187,11 +155,9 @@ class DuplicateReviewOrganizer:
                         if limit_groups is not None and groups_emitted >= limit_groups:
                             return
                     current_group = []
-
                 if sha512 != current_sha:
                     current_sha = sha512
                 current_group.append(item)
-
             if current_group and len(current_group) >= 2:
                 yield current_group
         finally:
@@ -204,7 +170,6 @@ class DuplicateReviewOrganizer:
         candidate = directory / filename
         if filename.lower() not in planned_names and not candidate.exists():
             return candidate
-
         counter = 1
         while True:
             candidate_name = f"{stem}_{counter}{suffix}"
@@ -235,58 +200,59 @@ class DuplicateReviewOrganizer:
                 digest.update(chunk)
         return digest.hexdigest().lower()
 
-    def _move_verified_cross_volume(self, item: DuplicateFile, target: Path) -> None:
-        """Move safely across volumes: copy to temp, verify SHA-512, then delete source."""
+    def _verify_source(self, item: DuplicateFile) -> None:
+        source = item.source
+        try:
+            stat = source.stat()
+        except OSError as exc:
+            raise RuntimeError(f"Nie można odczytać źródła: {source}: {exc}") from exc
+        if stat.st_size != item.size:
+            raise RuntimeError(
+                f"Rozmiar źródła ({stat.st_size}) nie zgadza się z AllDup ({item.size}); źródło pozostawiono bez zmian."
+            )
+        source_sha = self._sha512_file(source)
+        if source_sha != item.sha512:
+            raise RuntimeError(
+                "SHA-512 źródła nie zgadza się z AllDup; pliku nie przeniesiono."
+            )
+
+    def _move_verified(self, item: DuplicateFile, target: Path) -> None:
+        """Verify source, then move. Cross-volume moves verify destination before deleting source."""
         source = item.source
         target.parent.mkdir(parents=True, exist_ok=True)
+        self._verify_source(item)
 
-        # Same-volume move: this is a real filesystem move and needs no copy.
         try:
             os.replace(source, target)
+            # Same-volume os.replace is atomic, but verify the moved file before reporting success.
+            if target.stat().st_size != item.size or self._sha512_file(target) != item.sha512:
+                raise RuntimeError("Przeniesiony plik nie przechodzi weryfikacji SHA-512.")
             return
         except OSError as exc:
-            # Windows ERROR_NOT_SAME_DEVICE is winerror 17.
-            # Only that condition is allowed to fall back to cross-volume transfer.
             if getattr(exc, "winerror", None) != 17 and exc.errno != 18:
                 raise
 
         temp_target = target.with_name(target.name + ".ai-sorter-partial")
         temp_target.unlink(missing_ok=True)
-
         try:
             shutil.copyfile(source, temp_target)
-
             actual_size = temp_target.stat().st_size
             if actual_size != item.size:
-                raise RuntimeError(
-                    f"Rozmiar pliku docelowego ({actual_size}) nie zgadza się z AllDup ({item.size})."
-                )
-
+                raise RuntimeError(f"Rozmiar pliku docelowego ({actual_size}) nie zgadza się z AllDup ({item.size}).")
             destination_sha512 = self._sha512_file(temp_target)
             if destination_sha512 != item.sha512:
-                raise RuntimeError(
-                    "SHA-512 pliku docelowego nie zgadza się z checksumem AllDup; źródło pozostawiono bez zmian."
-                )
-
-            # Finalize the destination only after successful verification.
+                raise RuntimeError("SHA-512 pliku docelowego nie zgadza się z checksumem AllDup; źródło pozostawiono bez zmian.")
             os.replace(temp_target, target)
-
-            # Only now remove the source. If removal fails, report failure rather
-            # than pretending the operation completed as a true move.
             try:
                 source.unlink()
             except OSError as exc:
-                raise RuntimeError(
-                    f"Cel został zweryfikowany, ale nie udało się usunąć źródła: {exc}"
-                ) from exc
+                raise RuntimeError(f"Cel został zweryfikowany, ale nie udało się usunąć źródła: {exc}") from exc
         finally:
             temp_target.unlink(missing_ok=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Group SHA-512 duplicates from the entire AllDup database into numbered review folders."
-    )
+    parser = argparse.ArgumentParser(description="Group SHA-512 duplicates from the entire AllDup database into numbered review folders.")
     parser.add_argument("alldup_db", type=Path, help="Path to AllDup checksum.adb")
     parser.add_argument("destination_root", type=Path, help="Empty root for numbered review folders")
     parser.add_argument("--apply", action="store_true", help="Actually move files; default is dry-run")
@@ -297,13 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        stats = DuplicateReviewOrganizer(
-            args.alldup_db, args.destination_root
-        ).run(apply=args.apply, limit_groups=args.limit_groups)
+        stats = DuplicateReviewOrganizer(args.alldup_db, args.destination_root).run(
+            apply=args.apply, limit_groups=args.limit_groups
+        )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-
     print("Duplicate Review Organizer")
     print(f"AllDup database: {args.alldup_db.resolve()}")
     print(f"Destination: {args.destination_root.resolve()}")
