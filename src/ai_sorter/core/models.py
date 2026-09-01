@@ -12,8 +12,6 @@ class FileRecord:
 
     sha512: str
     size_bytes: int | None = None
-    width_px: int | None = None
-    height_px: int | None = None
     modified_at: datetime | None = None
     created_at: datetime | None = None
     status: str = "ACTIVE"
