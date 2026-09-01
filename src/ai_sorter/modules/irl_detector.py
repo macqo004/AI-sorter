@@ -1,13 +1,14 @@
-"""Heuristic IRL (real-life photograph) detector.
+"""Experimental heuristic IRL (real-life photograph) detector.
 
 This first generation deliberately avoids external AI models. It produces an
-interpretable score plus IRL / NOT_IRL / UNCERTAIN classification so the
-thresholds can later be calibrated against human-reviewed samples.
+interpretable score plus IRL / NOT_IRL / UNCERTAIN classification. It is a
+calibration prototype and is not yet considered a production-quality semantic
+classifier.
 """
 from __future__ import annotations
 
+import colorsys
 import json
-import math
 import os
 import threading
 import time
@@ -75,8 +76,10 @@ class _Result:
 
 
 class IRLDetector:
+    """Run the current heuristic IRL prototype on a database scope."""
+
     module_id = "irl_detector"
-    module_version = "0.1.0"
+    module_version = "0.1.1"
     result_key = "irl_detection"
 
     def __init__(
@@ -101,7 +104,7 @@ class IRLDetector:
         started_at = datetime.now(timezone.utc)
         started_perf = time.perf_counter()
         self._cancel_event.clear()
-        self.database.register_module(ModuleRecord(self.module_id, "IRL Detector", self.module_version, True))
+        self.database.register_module(ModuleRecord(self.module_id, "IRL Detector (experimental)", self.module_version, True))
         execution_id = self.database.start_module_execution(self.module_id, started_at)
 
         considered = processed = skipped = failed = 0
@@ -120,18 +123,14 @@ class IRLDetector:
                     pending[executor.submit(self._analyse_target, target)] = target
                     if len(pending) >= self.worker_count * 4:
                         done, _ = wait(pending, return_when=FIRST_COMPLETED)
-                        processed, failed = self._consume_done(
-                            done, pending, result_batch, processed, failed, progress_callback
-                        )
+                        processed, failed = self._consume_done(done, pending, result_batch, processed, failed, progress_callback)
                         if len(result_batch) >= self.batch_size:
                             self._persist_batch(result_batch, execution_id)
                             result_batch.clear()
 
                 while pending:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
-                    processed, failed = self._consume_done(
-                        done, pending, result_batch, processed, failed, progress_callback
-                    )
+                    processed, failed = self._consume_done(done, pending, result_batch, processed, failed, progress_callback)
                     if len(result_batch) >= self.batch_size:
                         self._persist_batch(result_batch, execution_id)
                         result_batch.clear()
@@ -165,7 +164,7 @@ class IRLDetector:
         if self.scope_root is not None:
             root = str(self.scope_root).rstrip("\\/")
             scope_clause = " AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)"
-            params.extend([root, root + "\\%"])  # type: ignore[arg-type]
+            params.extend([root, root + "\\%"])
 
         cursor = connection.execute(
             f"""
@@ -226,11 +225,7 @@ class IRLDetector:
                             self.module_id,
                             self.result_key,
                             result.payload.get("irl_score"),
-                            json.dumps(
-                                {**result.payload, "execution_id": execution_id, "module_version": self.module_version},
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
+                            json.dumps({**result.payload, "execution_id": execution_id, "module_version": self.module_version}, ensure_ascii=False, sort_keys=True),
                         )
                         for result in results
                     ],
@@ -240,7 +235,7 @@ class IRLDetector:
 
     def _analyse_target(self, target: _Target) -> _Result:
         try:
-            from PIL import Image, ImageStat
+            from PIL import Image
         except ImportError as exc:
             raise RuntimeError("Moduł IRL Detector wymaga biblioteki Pillow.") from exc
 
@@ -250,15 +245,13 @@ class IRLDetector:
                 original_width, original_height = image.size
                 exif = image.getexif()
                 image.thumbnail((self.config.sample_longest_side, self.config.sample_longest_side), Image.Resampling.BILINEAR)
-                pixels = list(image.getdata())
         except Exception as exc:
             raise RuntimeError(f"Nie można przeanalizować obrazu: {target.path}") from exc
 
-        if not pixels:
-            raise RuntimeError(f"Obraz nie zawiera analizowalnych pikseli: {target.path}")
-
         gray = image.convert("L")
-        entropy = ImageStat.Stat(gray).entropy
+        # Pillow exposes entropy directly on Image.Image. Calling it here is
+        # deterministic and avoids the nonexistent ImageStat.Stat.entropy API.
+        entropy = gray.entropy()
         quantized = image.resize((64, 64), Image.Resampling.BILINEAR).quantize(colors=256)
         palette_counts = quantized.getcolors(maxcolors=256 * 64 * 64) or []
         unique_colors = len(palette_counts)
