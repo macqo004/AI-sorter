@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 from ai_sorter.core.database import Database
 from ai_sorter.core.models import FileLocationRecord, FileRecord, ModuleRecord
@@ -25,7 +25,7 @@ class DatabaseTests(unittest.TestCase):
     def test_schema_bootstraps_to_current_version(self) -> None:
         status = self.db.status()
         self.assertTrue(status.connected)
-        self.assertEqual(status.schema_version, 2)
+        self.assertEqual(status.schema_version, 3)
 
     def test_same_sha512_is_one_file_with_multiple_locations(self) -> None:
         modified = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
@@ -34,6 +34,8 @@ class DatabaseTests(unittest.TestCase):
                 sha512=VALID_SHA,
                 size_bytes=123,
                 modified_at=modified,
+                width_px=1920,
+                height_px=1080,
             )
         )
         self.db.upsert_file_location(
@@ -56,6 +58,10 @@ class DatabaseTests(unittest.TestCase):
         status = self.db.status()
         self.assertEqual(status.file_count, 1)
         self.assertEqual(status.location_count, 2)
+        row = self.db.connection.execute(
+            "SELECT width_px, height_px FROM file_record WHERE sha512 = ?", (VALID_SHA,)
+        ).fetchone()
+        self.assertEqual((row["width_px"], row["height_px"]), (1920, 1080))
 
     def test_module_registration_and_execution(self) -> None:
         self.db.register_module(
