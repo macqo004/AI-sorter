@@ -8,7 +8,7 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -99,7 +99,7 @@ class Scanner:
         store = ScannerStore(self.database)
         store.begin_scan()
 
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now()
         execution_id = self.database.start_module_execution(self.module_id, started_at)
         started_perf = time.perf_counter()
         discovery_start = time.perf_counter()
@@ -246,8 +246,10 @@ class Scanner:
                         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                             continue
                         stat = entry.stat(follow_symlinks=False)
-                        yield _FileCandidate(path, stat.st_size,
-                                             datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc))
+                        # Match the local date/time and whole-second precision displayed
+                        # by Windows Explorer in file Properties.
+                        modified_at = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0)
+                        yield _FileCandidate(path, stat.st_size, modified_at)
                     except OSError:
                         continue
                 stack.extend(reversed(directories))
