@@ -16,6 +16,7 @@ dependencies = [
 ai-sorter = "ai_sorter.main:main"
 ai-sorter-alldup-sha512 = "ai_sorter.alldup_sha512_compare:main"
 ai-sorter-alldup-details = "ai_sorter.alldup_checksum_details:main"
+ai-sorter-alldup-stats = "ai_sorter.alldup_checksum_stats:main"
 ai-sorter-alldup-import = "ai_sorter.alldup_sha512_import:main"
 ai-sorter-alldup-full-import = "ai_sorter.alldup_full_import:main"
 ai-sorter-duplicate-review = "ai_sorter.tools.duplicate_review_organizer:main"
