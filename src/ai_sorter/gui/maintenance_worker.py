@@ -66,6 +66,12 @@ class MaintenanceWorker(QObject):
                 checked += 1
                 if not exists:
                     missing_paths.append(path_text)
+                else:
+                    # A successful validation also refreshes the location's last-seen marker.
+                    connection.execute(
+                        "UPDATE file_location SET location_status = 'ACTIVE' WHERE absolute_path = ? AND location_status = 'ACTIVE'",
+                        (path_text,),
+                    )
             if missing_paths:
                 missing += self._mark_missing_batch(missing_paths)
             self.progress.emit(checked, max(1, total), "Checking file locations…")
@@ -75,31 +81,28 @@ class MaintenanceWorker(QObject):
         if not paths:
             return 0
         connection = self._connection()
-        connection.execute("BEGIN")
-        try:
+        with self.database.transaction() as connection:
             cursor = connection.executemany(
                 "UPDATE file_location SET location_status = 'MISSING' WHERE absolute_path = ? AND location_status = 'ACTIVE'",
                 [(path,) for path in paths],
             )
-            changed = max(0, cursor.rowcount or 0)
-            connection.commit()
-            return changed
-        except Exception:
-            connection.rollback()
-            raise
+            return max(0, cursor.rowcount or 0)
 
     def _cleanup_inactive(self) -> str:
         connection = self._connection()
+        # Only MISSING locations are cleanup candidates. Other non-ACTIVE values,
+        # if introduced later for audit/history, are retained until explicitly handled.
         inactive_count = int(connection.execute(
-            "SELECT COUNT(*) AS count FROM file_location WHERE location_status <> 'ACTIVE'"
+            "SELECT COUNT(*) AS count FROM file_location WHERE location_status = 'MISSING'"
         ).fetchone()["count"])
         orphan_count = int(connection.execute(
             """
             SELECT COUNT(*) AS count
             FROM file_record fr
-            WHERE NOT EXISTS (
-                SELECT 1 FROM file_location fl WHERE fl.sha512 = fr.sha512
-            )
+            WHERE fr.status = 'ACTIVE'
+              AND NOT EXISTS (
+                  SELECT 1 FROM file_location fl WHERE fl.sha512 = fr.sha512
+              )
             """
         ).fetchone()["count"])
         total = inactive_count + orphan_count
@@ -109,47 +112,38 @@ class MaintenanceWorker(QObject):
 
         while True:
             rows = connection.execute(
-                f"SELECT rowid FROM file_location WHERE location_status <> 'ACTIVE' LIMIT {BATCH_SIZE}"
+                f"SELECT rowid FROM file_location WHERE location_status = 'MISSING' LIMIT {BATCH_SIZE}"
             ).fetchall()
             if not rows:
                 break
             rowids = [int(row["rowid"]) for row in rows]
             placeholders = ",".join("?" for _ in rowids)
-            connection.execute("BEGIN")
-            try:
-                cursor = connection.execute(
-                    f"DELETE FROM file_location WHERE rowid IN ({placeholders})", rowids
-                )
+            with self.database.transaction() as connection:
+                cursor = connection.execute(f"DELETE FROM file_location WHERE rowid IN ({placeholders})", rowids)
                 count = max(0, cursor.rowcount or 0)
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
             removed_locations += count
             current += count
-            self.progress.emit(min(current, max(1, total)), max(1, total), "Removing inactive locations…")
+            self.progress.emit(min(current, max(1, total)), max(1, total), "Removing missing locations…")
 
         while True:
             rows = connection.execute(
-                f"SELECT rowid FROM file_record fr WHERE NOT EXISTS (SELECT 1 FROM file_location fl WHERE fl.sha512 = fr.sha512) LIMIT {BATCH_SIZE}"
+                f"""
+                SELECT rowid FROM file_record fr
+                WHERE fr.status = 'ACTIVE'
+                  AND NOT EXISTS (SELECT 1 FROM file_location fl WHERE fl.sha512 = fr.sha512)
+                LIMIT {BATCH_SIZE}
+                """
             ).fetchall()
             if not rows:
                 break
             rowids = [int(row["rowid"]) for row in rows]
             placeholders = ",".join("?" for _ in rowids)
-            connection.execute("BEGIN")
-            try:
-                cursor = connection.execute(
-                    f"DELETE FROM file_record WHERE rowid IN ({placeholders})", rowids
-                )
+            with self.database.transaction() as connection:
+                cursor = connection.execute(f"DELETE FROM file_record WHERE rowid IN ({placeholders})", rowids)
                 count = max(0, cursor.rowcount or 0)
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
             removed_records += count
             current += count
             self.progress.emit(min(current, max(1, total)), max(1, total), "Removing orphan file records…")
 
         self.progress.emit(max(1, total), max(1, total), "Cleanup complete.")
-        return f"Removed locations: {removed_locations:,}\nRemoved orphan file records: {removed_records:,}"
+        return f"Removed missing locations: {removed_locations:,}\nRemoved orphan ACTIVE file records: {removed_records:,}"
