@@ -68,7 +68,7 @@ class Scanner:
     """Discover supported files and synchronize their filesystem identity into SQLite."""
 
     module_id = "scanner"
-    module_version = "0.4.0"
+    module_version = "0.4.1"
 
     def __init__(
         self,
@@ -87,27 +87,15 @@ class Scanner:
         self._executor: ThreadPoolExecutor | None = None
 
     def cancel(self) -> None:
-        """Request cancellation after currently running file operations finish."""
         self._cancel_event.set()
 
-    def scan(
-        self,
-        root: Path,
-        progress_callback: ProgressCallback | None = None,
-    ) -> ScanSummary:
+    def scan(self, root: Path, progress_callback: ProgressCallback | None = None) -> ScanSummary:
         root = root.resolve()
         if not root.exists() or not root.is_dir():
             raise ValueError(f"Folder skanowania nie istnieje lub nie jest katalogiem: {root}")
 
         self._cancel_event.clear()
-        self.database.register_module(
-            ModuleRecord(
-                module_id=self.module_id,
-                display_name="Scanner",
-                module_version=self.module_version,
-                enabled=True,
-            )
-        )
+        self.database.register_module(ModuleRecord(self.module_id, "Scanner", self.module_version, True))
         store = ScannerStore(self.database)
         store.begin_scan()
 
@@ -146,18 +134,8 @@ class Scanner:
                 touch_batch.clear()
 
         def emit() -> None:
-            self._emit(
-                progress_callback,
-                discovered,
-                processed,
-                scanned,
-                saved,
-                skipped,
-                failed,
-                -1,
-                current_discovery_path,
-                last_completed_path,
-            )
+            self._emit(progress_callback, discovered, processed, scanned, saved, skipped, failed,
+                       discovered, current_discovery_path, last_completed_path)
 
         def persist_completed(done: set[Future[_HashedFile]]) -> None:
             nonlocal processed, scanned, saved, failed, hash_seconds, last_completed_path
@@ -169,25 +147,11 @@ class Scanner:
                     scanned += 1
                     hash_seconds += result.hash_seconds
                     last_completed_path = str(candidate.path)
-                    save_batch_files.append(
-                        FileRecord(
-                            sha512=result.sha512,
-                            size_bytes=result.candidate.size,
-                            modified_at=result.candidate.modified_at,
-                            created_at=None,
-                            status="ACTIVE",
-                        )
-                    )
-                    save_batch_locations.append(
-                        FileLocationRecord(
-                            sha512=result.sha512,
-                            absolute_path=str(result.candidate.path),
-                            file_size=result.candidate.size,
-                            modified_at=result.candidate.modified_at,
-                            location_status="ACTIVE",
-                            last_seen_execution_id=execution_id,
-                        )
-                    )
+                    save_batch_files.append(FileRecord(result.sha512, result.candidate.size,
+                                                       None, None, result.candidate.modified_at, None, "ACTIVE"))
+                    save_batch_locations.append(FileLocationRecord(result.sha512, str(result.candidate.path),
+                                                                   result.candidate.size, result.candidate.modified_at,
+                                                                   "ACTIVE", execution_id))
                     saved += 1
                 except Exception:
                     failed += 1
@@ -198,11 +162,9 @@ class Scanner:
             nonlocal processed, skipped, database_seconds, current_discovery_path
             if not candidates:
                 return
-
             lookup_start = time.perf_counter()
             known = store.lookup_locations([str(candidate.path) for candidate in candidates])
             database_seconds += time.perf_counter() - lookup_start
-
             for candidate in candidates:
                 current_discovery_path = str(candidate.path)
                 if self._can_reuse_hash(known.get(str(candidate.path)), candidate):
@@ -213,13 +175,11 @@ class Scanner:
                         flush_batches()
                     emit()
                     continue
-
                 while len(pending) >= max_pending and not self._cancel_event.is_set():
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
                     persist_completed(done)
                     if len(save_batch_files) >= self.db_batch_size:
                         flush_batches()
-
                 if self._cancel_event.is_set():
                     return
                 if self._executor is None:
@@ -239,20 +199,15 @@ class Scanner:
                     if self._cancel_event.is_set():
                         cancelled = True
                         break
-
                 if not self._cancel_event.is_set():
                     process_candidate_batch(candidate_batch)
-
                 discovery_seconds = time.perf_counter() - discovery_start
-
                 while pending:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
                     persist_completed(done)
                     if len(save_batch_files) >= self.db_batch_size:
                         flush_batches()
-
                 flush_batches()
-
             cancelled = cancelled or self._cancel_event.is_set()
             if not cancelled:
                 db_start = time.perf_counter()
@@ -262,33 +217,13 @@ class Scanner:
         finally:
             self._executor = None
             flush_batches()
-            self.database.finish_module_execution(
-                ModuleExecutionRecord(
-                    execution_id=execution_id,
-                    module_id=self.module_id,
-                    started_at=started_at,
-                    status=status,
-                    processed_count=processed,
-                    success_count=saved + skipped,
-                    failure_count=failed,
-                )
-            )
+            self.database.finish_module_execution(ModuleExecutionRecord(
+                execution_id, self.module_id, started_at, status,
+                processed, saved + skipped, failed
+            ))
 
-        return ScanSummary(
-            execution_id=execution_id,
-            discovered=discovered,
-            processed=processed,
-            scanned=scanned,
-            saved=saved,
-            skipped=skipped,
-            failed=failed,
-            missing=missing,
-            cancelled=cancelled,
-            elapsed_seconds=time.perf_counter() - started_perf,
-            discovery_seconds=discovery_seconds,
-            hash_seconds=hash_seconds,
-            database_seconds=database_seconds,
-        )
+        return ScanSummary(execution_id, discovered, processed, scanned, saved, skipped, failed, missing,
+                           cancelled, time.perf_counter() - started_perf, discovery_seconds, hash_seconds, database_seconds)
 
     def _discover(self, root: Path) -> Iterable[_FileCandidate]:
         stack = [root]
@@ -311,29 +246,19 @@ class Scanner:
                         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                             continue
                         stat = entry.stat(follow_symlinks=False)
-                        yield _FileCandidate(
-                            path=path,
-                            size=stat.st_size,
-                            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).replace(microsecond=0),
-                        )
+                        yield _FileCandidate(path, stat.st_size,
+                                             datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc))
                     except OSError:
                         continue
-
                 stack.extend(reversed(directories))
             except OSError:
                 continue
 
     @staticmethod
-    def _can_reuse_hash(
-        location: FileLocationRecord | None,
-        candidate: _FileCandidate,
-    ) -> bool:
-        return bool(
-            location
-            and location.location_status == "ACTIVE"
-            and location.file_size == candidate.size
-            and location.modified_at == candidate.modified_at
-        )
+    def _can_reuse_hash(location: FileLocationRecord | None, candidate: _FileCandidate) -> bool:
+        return bool(location and location.location_status == "ACTIVE"
+                    and location.file_size == candidate.size
+                    and location.modified_at == candidate.modified_at)
 
     @staticmethod
     def _hash_file(candidate: _FileCandidate) -> _HashedFile:
@@ -345,29 +270,9 @@ class Scanner:
         return _HashedFile(candidate, digest.hexdigest(), time.perf_counter() - started)
 
     @staticmethod
-    def _emit(
-        callback: ProgressCallback | None,
-        discovered: int,
-        processed: int,
-        scanned: int,
-        saved: int,
-        skipped: int,
-        failed: int,
-        total: int,
-        current_discovery_path: str | None,
-        last_completed_path: str | None,
-    ) -> None:
+    def _emit(callback: ProgressCallback | None, discovered: int, processed: int, scanned: int,
+              saved: int, skipped: int, failed: int, total: int,
+              current_discovery_path: str | None, last_completed_path: str | None) -> None:
         if callback:
-            callback(
-                ScanProgress(
-                    discovered,
-                    processed,
-                    scanned,
-                    saved,
-                    skipped,
-                    failed,
-                    total,
-                    current_discovery_path,
-                    last_completed_path,
-                )
-            )
+            callback(ScanProgress(discovered, processed, scanned, saved, skipped, failed,
+                                  max(0, total), current_discovery_path, last_completed_path))
