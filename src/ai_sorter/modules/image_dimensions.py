@@ -59,7 +59,7 @@ class ImageDimensions:
     """Populate missing width/height metadata without hashing image contents."""
 
     module_id = "image_dimensions"
-    module_version = "0.1.2"
+    module_version = "0.1.3"
 
     def __init__(self, database: Database, worker_count: int = 0, batch_size: int = 256) -> None:
         self.database = database
@@ -138,10 +138,8 @@ class ImageDimensions:
                 execution_id, self.module_id, started_at, status, processed, updated, failed
             ))
 
-        return DimensionSummary(
-            execution_id, considered, processed, updated, skipped, failed, cancelled,
-            time.perf_counter() - started_perf
-        )
+        return DimensionSummary(execution_id, considered, processed, updated, skipped, failed, cancelled,
+                                time.perf_counter() - started_perf)
 
     def _count_targets(self) -> int:
         connection = self.database.connection
@@ -178,25 +176,24 @@ class ImageDimensions:
         )
         current_sha: str | None = None
         chosen_path: Path | None = None
+        first_path: Path | None = None
         for row in cursor:
             sha = str(row["sha512"])
             path = Path(str(row["absolute_path"]))
             if sha != current_sha:
                 if current_sha is not None:
-                    # A SHA with no existing physical copy is reported as a failure below
-                    # by omitting it from targets; it remains in the DB for the maintenance checker.
-                    if chosen_path is not None:
-                        yield _Target(current_sha, chosen_path)
+                    yield _Target(current_sha, chosen_path or first_path or Path(""))
                 current_sha = sha
                 chosen_path = None
+                first_path = path
             if chosen_path is None:
                 try:
                     if path.is_file():
                         chosen_path = path
                 except OSError:
                     pass
-        if current_sha is not None and chosen_path is not None:
-            yield _Target(current_sha, chosen_path)
+        if current_sha is not None:
+            yield _Target(current_sha, chosen_path or first_path or Path(""))
 
     @staticmethod
     def _read_dimensions(target: _Target) -> _Result:
