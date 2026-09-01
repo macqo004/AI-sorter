@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -31,14 +30,9 @@ class ScannerStore:
         self.connection.commit()
 
     def _ensure_last_seen_column(self) -> None:
-        columns = {
-            row["name"]
-            for row in self.connection.execute("PRAGMA table_info(file_location)").fetchall()
-        }
+        columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(file_location)").fetchall()}
         if "last_seen_execution_id" not in columns:
-            self.connection.execute(
-                "ALTER TABLE file_location ADD COLUMN last_seen_execution_id INTEGER"
-            )
+            self.connection.execute("ALTER TABLE file_location ADD COLUMN last_seen_execution_id INTEGER")
             self.connection.commit()
 
     def begin_scan(self) -> None:
@@ -46,10 +40,8 @@ class ScannerStore:
         self.connection.commit()
 
     def lookup_locations(self, absolute_paths: list[str]) -> dict[str, FileLocationRecord]:
-        """Return known locations using bounded IN queries instead of one query per file."""
         if not absolute_paths:
             return {}
-
         result: dict[str, FileLocationRecord] = {}
         unique_paths = list(dict.fromkeys(absolute_paths))
         try:
@@ -75,16 +67,10 @@ class ScannerStore:
                         last_seen_execution_id=row["last_seen_execution_id"],
                     )
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się sprawdzić istniejących lokalizacji plików w bazie danych."
-            ) from exc
+            raise DatabaseError("Nie udało się sprawdzić istniejących lokalizacji plików w bazie danych.") from exc
         return result
 
-    def touch_batch(
-        self,
-        items: list[tuple[str, int, datetime]],
-        execution_id: int,
-    ) -> None:
+    def touch_batch(self, items: list[tuple[str, int, datetime]], execution_id: int) -> None:
         if not items:
             return
         try:
@@ -92,32 +78,20 @@ class ScannerStore:
                 connection.executemany(
                     """
                     UPDATE file_location
-                    SET file_size = ?,
-                        modified_at = ?,
-                        location_status = 'ACTIVE',
+                    SET file_size = ?, modified_at = ?, location_status = 'ACTIVE',
                         last_seen_execution_id = ?
                     WHERE absolute_path = ?
                     """,
-                    [
-                        (size, modified_at.isoformat(timespec="seconds"), execution_id, path)
-                        for path, size, modified_at in items
-                    ],
+                    [(size, self._windows_time(modified_at), execution_id, path) for path, size, modified_at in items],
                 )
                 connection.executemany(
                     "INSERT OR IGNORE INTO scanner_seen_paths (absolute_path) VALUES (?)",
                     [(path,) for path, _, _ in items],
                 )
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się zapisać bieżącego stanu lokalizacji plików."
-            ) from exc
+            raise DatabaseError("Nie udało się zapisać bieżącego stanu lokalizacji plików.") from exc
 
-    def persist_batch(
-        self,
-        files: list[FileRecord],
-        locations: list[FileLocationRecord],
-        execution_id: int,
-    ) -> None:
+    def persist_batch(self, files: list[FileRecord], locations: list[FileLocationRecord], execution_id: int) -> None:
         if not files:
             return
         try:
@@ -125,10 +99,12 @@ class ScannerStore:
                 connection.executemany(
                     """
                     INSERT INTO file_record
-                        (sha512, size_bytes, modified_at, created_at, status)
-                    VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
+                        (sha512, size_bytes, width_px, height_px, modified_at, created_at, status)
+                    VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
                     ON CONFLICT(sha512) DO UPDATE SET
                         size_bytes = excluded.size_bytes,
+                        width_px = COALESCE(excluded.width_px, file_record.width_px),
+                        height_px = COALESCE(excluded.height_px, file_record.height_px),
                         modified_at = excluded.modified_at,
                         status = excluded.status
                     """,
@@ -136,8 +112,10 @@ class ScannerStore:
                         (
                             record.sha512.lower(),
                             record.size_bytes,
-                            self._iso(record.modified_at),
-                            self._iso(record.created_at),
+                            record.width_px,
+                            record.height_px,
+                            self._windows_time(record.modified_at),
+                            self._windows_time(record.created_at),
                             record.status,
                         )
                         for record in files
@@ -146,8 +124,7 @@ class ScannerStore:
                 connection.executemany(
                     """
                     INSERT INTO file_location
-                        (sha512, absolute_path, file_size, modified_at, location_status,
-                         last_seen_execution_id)
+                        (sha512, absolute_path, file_size, modified_at, location_status, last_seen_execution_id)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(sha512, absolute_path) DO UPDATE SET
                         file_size = excluded.file_size,
@@ -160,7 +137,7 @@ class ScannerStore:
                             record.sha512.lower(),
                             record.absolute_path,
                             record.file_size,
-                            self._iso(record.modified_at),
+                            self._windows_time(record.modified_at),
                             record.location_status,
                             execution_id,
                         )
@@ -172,9 +149,7 @@ class ScannerStore:
                     [(record.absolute_path,) for record in locations],
                 )
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się zapisać partii wyników skanowania w bazie danych."
-            ) from exc
+            raise DatabaseError("Nie udało się zapisać partii wyników skanowania w bazie danych.") from exc
 
     def mark_missing_under_root(self, root: Path) -> int:
         root_text = str(root.resolve()).rstrip("\\/")
@@ -186,24 +161,16 @@ class ScannerStore:
                     UPDATE file_location
                     SET location_status = 'MISSING'
                     WHERE location_status = 'ACTIVE'
-                      AND absolute_path LIKE ?
+                      AND (absolute_path = ? OR absolute_path LIKE ?)
                       AND absolute_path NOT IN (SELECT absolute_path FROM scanner_seen_paths)
                     """,
-                    (pattern,),
+                    (root_text, pattern),
                 )
                 return max(0, cursor.rowcount)
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się ustalić, które lokalizacje plików są już niedostępne."
-            ) from exc
+            raise DatabaseError("Nie udało się ustalić, które lokalizacje plików są już niedostępne.") from exc
 
     def clear_folder(self, root: Path) -> tuple[int, int]:
-        """Remove Scanner-owned locations under root and orphaned file identities.
-
-        A temporary SHA table is used instead of a giant ``IN (?, ?, ...)`` list,
-        so clearing large roots is not limited by SQLite's bind-parameter limit.
-        File records that still have another location are preserved.
-        """
         root_text = str(root.resolve()).rstrip("\\/")
         pattern = root_text + "\\%"
         try:
@@ -212,21 +179,15 @@ class ScannerStore:
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO scanner_clear_shas (sha512)
-                    SELECT DISTINCT sha512
-                    FROM file_location
+                    SELECT DISTINCT sha512 FROM file_location
                     WHERE location_status IN ('ACTIVE', 'MISSING')
                       AND (absolute_path = ? OR absolute_path LIKE ?)
                     """,
                     (root_text, pattern),
                 )
-                affected = int(
-                    connection.execute(
-                        "SELECT COUNT(*) AS count FROM scanner_clear_shas"
-                    ).fetchone()["count"]
-                )
+                affected = int(connection.execute("SELECT COUNT(*) AS count FROM scanner_clear_shas").fetchone()["count"])
                 if affected == 0:
                     return 0, 0
-
                 connection.execute(
                     """
                     DELETE FROM file_location
@@ -238,35 +199,19 @@ class ScannerStore:
                 orphan_cursor = connection.execute(
                     """
                     DELETE FROM file_record
-                    WHERE EXISTS (
-                        SELECT 1
-                        FROM scanner_clear_shas scs
-                        WHERE scs.sha512 = file_record.sha512
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM file_location fl
-                        WHERE fl.sha512 = file_record.sha512
-                    )
+                    WHERE EXISTS (SELECT 1 FROM scanner_clear_shas scs WHERE scs.sha512 = file_record.sha512)
+                      AND status = 'ACTIVE'
+                      AND NOT EXISTS (SELECT 1 FROM file_location fl WHERE fl.sha512 = file_record.sha512)
                     """
                 )
                 return affected, max(0, orphan_cursor.rowcount or 0)
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się wyczyścić wyników Scanner dla wybranego folderu. "
-                "Pliki kolekcji nie zostały zmienione."
-            ) from exc
+            raise DatabaseError("Nie udało się wyczyścić wyników Scanner dla wybranego folderu. Pliki kolekcji nie zostały zmienione.") from exc
 
     def check_all_locations(self) -> tuple[int, int]:
-        """Check all ACTIVE Scanner locations using filesystem metadata only.
-
-        Returns (checked, marked_missing). No file contents are read and no SHA-512 is recalculated.
-        """
         checked = missing = 0
         try:
-            cursor = self.connection.execute(
-                "SELECT absolute_path FROM file_location WHERE location_status = 'ACTIVE'"
-            )
+            cursor = self.connection.execute("SELECT absolute_path FROM file_location WHERE location_status = 'ACTIVE'")
             missing_paths: list[str] = []
             for row in cursor:
                 path = Path(str(row["absolute_path"]))
@@ -284,57 +229,64 @@ class ScannerStore:
                 missing += self._mark_missing_batch(missing_paths)
             return checked, missing
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się sprawdzić aktualności lokalizacji plików."
-            ) from exc
+            raise DatabaseError("Nie udało się sprawdzić aktualności lokalizacji plików.") from exc
 
     def _mark_missing_batch(self, paths: list[str]) -> int:
         if not paths:
             return 0
         with self.database.transaction() as connection:
-            connection.executemany(
+            cursor = connection.executemany(
                 "UPDATE file_location SET location_status = 'MISSING' WHERE absolute_path = ? AND location_status = 'ACTIVE'",
                 [(path,) for path in paths],
             )
-        return len(paths)
+            return max(0, cursor.rowcount or 0)
 
     def cleanup_inactive(self) -> tuple[int, int]:
-        """Delete MISSING locations and then delete file identities with no remaining locations."""
-        removed_locations = 0
-        removed_records = 0
+        """Delete only MISSING locations and orphaned ACTIVE identities; retain ARCHIVED history."""
+        removed_locations = removed_records = 0
         try:
-            with self.database.transaction() as connection:
-                cursor = connection.execute(
-                    "DELETE FROM file_location WHERE location_status <> 'ACTIVE'"
-                )
-                removed_locations = max(0, cursor.rowcount or 0)
-
-                # Repeat in batches to keep transaction and WAL sizes reasonable.
-                while True:
+            while True:
+                with self.database.transaction() as connection:
                     cursor = connection.execute(
                         f"""
-                        DELETE FROM file_record
-                        WHERE status = 'ACTIVE'
-                          AND NOT EXISTS (
-                              SELECT 1 FROM file_location fl WHERE fl.sha512 = file_record.sha512
-                          )
-                        LIMIT {self.CLEANUP_BATCH_SIZE}
+                        DELETE FROM file_location
+                        WHERE rowid IN (
+                            SELECT rowid FROM file_location
+                            WHERE location_status = 'MISSING'
+                            LIMIT {self.CLEANUP_BATCH_SIZE}
+                        )
                         """
                     )
                     count = max(0, cursor.rowcount or 0)
-                    removed_records += count
-                    if count < self.CLEANUP_BATCH_SIZE:
-                        break
-                return removed_locations, removed_records
+                removed_locations += count
+                if count < self.CLEANUP_BATCH_SIZE:
+                    break
+
+            while True:
+                with self.database.transaction() as connection:
+                    cursor = connection.execute(
+                        f"""
+                        DELETE FROM file_record
+                        WHERE rowid IN (
+                            SELECT fr.rowid FROM file_record AS fr
+                            WHERE fr.status = 'ACTIVE'
+                              AND NOT EXISTS (SELECT 1 FROM file_location fl WHERE fl.sha512 = fr.sha512)
+                            LIMIT {self.CLEANUP_BATCH_SIZE}
+                        )
+                        """
+                    )
+                    count = max(0, cursor.rowcount or 0)
+                removed_records += count
+                if count < self.CLEANUP_BATCH_SIZE:
+                    break
+            return removed_locations, removed_records
         except Exception as exc:
-            raise DatabaseError(
-                "Nie udało się usunąć nieaktywnych danych Scanner. "
-                "Pliki kolekcji nie zostały zmienione."
-            ) from exc
+            raise DatabaseError("Nie udało się usunąć nieaktywnych danych Scanner. Pliki kolekcji nie zostały zmienione.") from exc
 
     @staticmethod
-    def _iso(value: datetime | None) -> str | None:
-        return value.isoformat(timespec="seconds") if value is not None else None
+    def _windows_time(value: datetime | None) -> str | None:
+        """Store the local Windows-style timestamp displayed in file Properties to whole seconds."""
+        return value.replace(microsecond=0, tzinfo=None).isoformat(sep=" ") if value is not None else None
 
     @staticmethod
     def _parse_datetime(value: str | None) -> datetime | None:
