@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from ai_sorter.alldup_full_import import ALLDUP_SHA512_CTYPE
@@ -48,8 +48,8 @@ def _as_epoch_seconds(value: object) -> float | None:
     except ValueError:
         return None
 
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+    # A timestamp without an explicit zone is interpreted as local system time,
+    # matching the Windows file timestamp presented by Explorer Properties.
     return parsed.timestamp()
 
 
