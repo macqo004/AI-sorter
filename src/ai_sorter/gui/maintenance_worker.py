@@ -66,12 +66,6 @@ class MaintenanceWorker(QObject):
                 checked += 1
                 if not exists:
                     missing_paths.append(path_text)
-                else:
-                    # A successful validation also refreshes the location's last-seen marker.
-                    connection.execute(
-                        "UPDATE file_location SET location_status = 'ACTIVE' WHERE absolute_path = ? AND location_status = 'ACTIVE'",
-                        (path_text,),
-                    )
             if missing_paths:
                 missing += self._mark_missing_batch(missing_paths)
             self.progress.emit(checked, max(1, total), "Checking file locations…")
@@ -80,7 +74,6 @@ class MaintenanceWorker(QObject):
     def _mark_missing_batch(self, paths: list[str]) -> int:
         if not paths:
             return 0
-        connection = self._connection()
         with self.database.transaction() as connection:
             cursor = connection.executemany(
                 "UPDATE file_location SET location_status = 'MISSING' WHERE absolute_path = ? AND location_status = 'ACTIVE'",
@@ -143,7 +136,7 @@ class MaintenanceWorker(QObject):
                 count = max(0, cursor.rowcount or 0)
             removed_records += count
             current += count
-            self.progress.emit(min(current, max(1, total)), max(1, total), "Removing orphan file records…")
+            self.progress.emit(min(current, max(1, total)), max(1, total), "Removing orphan ACTIVE file records…")
 
         self.progress.emit(max(1, total), max(1, total), "Cleanup complete.")
         return f"Removed missing locations: {removed_locations:,}\nRemoved orphan ACTIVE file records: {removed_records:,}"
