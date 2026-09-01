@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +7,7 @@ from pathlib import Path
 from PIL import Image
 
 from ai_sorter.core.database import Database
+from ai_sorter.core.models import FileLocationRecord
 from ai_sorter.modules.image_dimensions import ImageDimensions
 from ai_sorter.modules.scanner import Scanner
 
@@ -32,12 +32,8 @@ class ImageDimensionsTests(unittest.TestCase):
                 self.assertEqual(summary.processed, 1)
                 self.assertEqual(summary.updated, 1)
                 self.assertEqual(summary.failed, 0)
-
-                row = db.connection.execute(
-                    "SELECT width_px, height_px FROM file_record"
-                ).fetchone()
+                row = db.connection.execute("SELECT width_px, height_px FROM file_record").fetchone()
                 self.assertEqual((row["width_px"], row["height_px"]), (640, 480))
-
                 second_run = ImageDimensions(db, worker_count=1).run()
                 self.assertEqual(second_run.considered, 0)
                 self.assertEqual(second_run.processed, 0)
@@ -48,8 +44,7 @@ class ImageDimensionsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             good = root / "good.png"
-            image = Image.new("RGB", (320, 200), "blue")
-            image.save(good)
+            Image.new("RGB", (320, 200), "blue").save(good)
 
             db = Database(root / "project.db")
             db.open()
@@ -57,12 +52,14 @@ class ImageDimensionsTests(unittest.TestCase):
                 Scanner(db, worker_count=1).scan(root)
                 sha = db.connection.execute("SELECT sha512 FROM file_record").fetchone()[0]
                 missing = root / "missing.png"
-                db.upsert_file_location(__import__("ai_sorter.core.models", fromlist=["FileLocationRecord"]).FileLocationRecord(
-                    sha512=sha,
-                    absolute_path=str(missing),
-                    file_size=good.stat().st_size,
-                    location_status="ACTIVE",
-                ))
+                db.upsert_file_location(
+                    FileLocationRecord(
+                        sha512=sha,
+                        absolute_path=str(missing),
+                        file_size=good.stat().st_size,
+                        location_status="ACTIVE",
+                    )
+                )
                 summary = ImageDimensions(db, worker_count=1).run()
                 self.assertEqual(summary.failed, 0)
                 row = db.connection.execute(
