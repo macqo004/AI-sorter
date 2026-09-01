@@ -16,7 +16,6 @@ from typing import Callable
 
 ALLDUP_SHA512_CTYPE = 5
 DEFAULT_BATCH_SIZE = 2000
-
 ProgressCallback = Callable[[int, int, int, int], None]
 
 
@@ -39,12 +38,7 @@ class AllDupFullImporter:
     module_id = "alldup_full_import"
     module_version = "0.1.0"
 
-    def __init__(
-        self,
-        alldup_path: Path,
-        project_path: Path,
-        batch_size: int = DEFAULT_BATCH_SIZE,
-    ) -> None:
+    def __init__(self, alldup_path: Path, project_path: Path, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self.alldup_path = alldup_path.resolve()
         self.project_path = project_path.resolve()
         self.batch_size = max(100, int(batch_size))
@@ -59,19 +53,17 @@ class AllDupFullImporter:
         started = time.perf_counter()
         if not self.alldup_path.is_file():
             raise ValueError(f"Nie znaleziono bazy AllDup: {self.alldup_path}")
-        if not self.project_path.parent.exists():
-            self.project_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.project_path.is_file():
+            raise ValueError(f"Nie znaleziono bazy Scanner: {self.project_path}")
 
-        source = self._open_alldup_readonly()
+        source = self._open_alldup_readonly(self.alldup_path)
         project = self._open_project(apply=apply)
         try:
             source_rows = self._count_source_rows(source, sample_size)
-            valid_rows = invalid_rows = unique_files = unique_locations = 0
+            valid_rows = invalid_rows = processed = 0
             imported_files = imported_locations = conflicts = 0
             files_batch: list[tuple[str, int]] = []
             locations_batch: list[tuple[str, str, int]] = []
-            seen_sha: set[str] = set()
-            seen_location: set[tuple[str, str]] = set()
 
             query = """
                 SELECT f.file AS absolute_path,
@@ -80,15 +72,14 @@ class AllDupFullImporter:
                 FROM hashc AS h
                 JOIN files AS f ON f.id = h.fileid
                 WHERE h.ctype = ?
-                ORDER BY f.id, f.file
+                ORDER BY f.id, f.file, h.id
             """
             params: list[object] = [ALLDUP_SHA512_CTYPE]
             if sample_size is not None:
-                query += " LIMIT ?"
                 params.append(max(1, int(sample_size)))
+                query += " LIMIT ?"
 
             cursor = source.execute(query, tuple(params))
-            processed = 0
             for row in cursor:
                 processed += 1
                 path = str(row["absolute_path"] or "").strip()
@@ -98,21 +89,12 @@ class AllDupFullImporter:
                     invalid_rows += 1
                 else:
                     valid_rows += 1
-                    if sha512 not in seen_sha:
-                        seen_sha.add(sha512)
-                        unique_files += 1
-                        files_batch.append((sha512, size))
-                    location_key = (sha512, path)
-                    if location_key not in seen_location:
-                        seen_location.add(location_key)
-                        unique_locations += 1
-                        locations_batch.append((sha512, path, size))
+                    files_batch.append((sha512, size))
+                    locations_batch.append((sha512, path, size))
 
-                if len(files_batch) >= self.batch_size or len(locations_batch) >= self.batch_size:
+                if len(locations_batch) >= self.batch_size:
                     if apply:
-                        f_count, l_count, c_count = self._persist_batch(
-                            project, files_batch, locations_batch
-                        )
+                        f_count, l_count, c_count = self._persist_batch(project, files_batch, locations_batch)
                         imported_files += f_count
                         imported_locations += l_count
                         conflicts += c_count
@@ -120,26 +102,25 @@ class AllDupFullImporter:
                     files_batch.clear()
                     locations_batch.clear()
                     if progress_callback:
-                        progress_callback(processed, source_rows, imported_files, conflicts)
+                        progress_callback(processed, source_rows, imported_locations, conflicts)
 
-            if apply and (files_batch or locations_batch):
-                f_count, l_count, c_count = self._persist_batch(
-                    project, files_batch, locations_batch
-                )
+            if apply and locations_batch:
+                f_count, l_count, c_count = self._persist_batch(project, files_batch, locations_batch)
                 imported_files += f_count
                 imported_locations += l_count
                 conflicts += c_count
                 project.commit()
 
             if progress_callback:
-                progress_callback(processed, source_rows, imported_files, conflicts)
+                progress_callback(processed, source_rows, imported_locations, conflicts)
 
+            unique_files, unique_locations = self._counts(project)
             return FullImportStats(
                 source_rows=source_rows,
                 valid_rows=valid_rows,
                 invalid_rows=invalid_rows,
-                unique_files=unique_files,
-                unique_locations=unique_locations,
+                unique_files=unique_files if apply else 0,
+                unique_locations=unique_locations if apply else 0,
                 imported_files=imported_files,
                 imported_locations=imported_locations,
                 conflicts=conflicts,
@@ -150,9 +131,7 @@ class AllDupFullImporter:
             source.close()
 
     @staticmethod
-    def _open_alldup_readonly(path: Path | None = None) -> sqlite3.Connection:
-        if path is None:
-            raise ValueError("AllDup path is required")
+    def _open_alldup_readonly(path: Path) -> sqlite3.Connection:
         connection = sqlite3.connect(
             f"file:{path.as_posix()}?mode=ro", uri=True, timeout=30
         )
@@ -161,8 +140,9 @@ class AllDupFullImporter:
         connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
-    def _open_project(self, *, apply: bool) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.project_path, timeout=30)
+    @staticmethod
+    def _open_project(path: Path, *, apply: bool) -> sqlite3.Connection:
+        connection = sqlite3.connect(path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
@@ -179,15 +159,18 @@ class AllDupFullImporter:
         total = int(row["count"] if row else 0)
         return min(total, max(0, int(sample_size))) if sample_size is not None else total
 
+    @staticmethod
+    def _counts(project: sqlite3.Connection) -> tuple[int, int]:
+        files = int(project.execute("SELECT COUNT(*) AS count FROM file_record").fetchone()["count"])
+        locations = int(project.execute("SELECT COUNT(*) AS count FROM file_location").fetchone()["count"])
+        return files, locations
+
     def _persist_batch(
         self,
         project: sqlite3.Connection,
         files: list[tuple[str, int]],
         locations: list[tuple[str, str, int]],
     ) -> tuple[int, int, int]:
-        if not files and not locations:
-            return 0, 0, 0
-
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         project.executemany(
             """
@@ -195,43 +178,64 @@ class AllDupFullImporter:
                 (sha512, size_bytes, width_px, height_px, modified_at, created_at, status)
             VALUES (?, ?, NULL, NULL, NULL, ?, 'ACTIVE')
             ON CONFLICT(sha512) DO UPDATE SET
-                size_bytes = COALESCE(file_record.size_bytes, excluded.size_bytes),
+                size_bytes = CASE
+                    WHEN file_record.size_bytes IS NULL OR file_record.size_bytes = 0
+                    THEN excluded.size_bytes ELSE file_record.size_bytes END,
                 status = 'ACTIVE'
             """,
             [(sha, size, now) for sha, size in files],
         )
 
-        conflicts = 0
-        for sha512, path, size in locations:
-            existing = project.execute(
-                """
-                SELECT sha512, file_size, location_status
-                FROM file_location
-                WHERE absolute_path = ?
-                """,
-                (path,),
-            ).fetchall()
-            active_other_sha = [
-                str(row["sha512"])
-                for row in existing
-                if row["location_status"] == "ACTIVE" and str(row["sha512"]) != sha512
-            ]
-            if active_other_sha:
-                conflicts += 1
-                continue
-            project.execute(
-                """
-                INSERT INTO file_location
-                    (sha512, absolute_path, file_size, modified_at, location_status, last_seen_execution_id)
-                VALUES (?, ?, ?, NULL, 'ACTIVE', NULL)
-                ON CONFLICT(sha512, absolute_path) DO UPDATE SET
-                    file_size = excluded.file_size,
-                    location_status = 'ACTIVE'
-                """,
-                (sha512, path, size),
+        project.execute("DROP TABLE IF EXISTS temp.alldup_import_stage")
+        project.execute(
+            """
+            CREATE TEMP TABLE alldup_import_stage (
+                sha512 TEXT NOT NULL,
+                absolute_path TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                PRIMARY KEY (sha512, absolute_path)
             )
+            """
+        )
+        project.executemany(
+            "INSERT OR IGNORE INTO alldup_import_stage (sha512, absolute_path, file_size) VALUES (?, ?, ?)",
+            locations,
+        )
 
-        return len(files), len(locations) - conflicts, conflicts
+        conflicts_row = project.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM alldup_import_stage s
+            JOIN file_location fl
+              ON fl.absolute_path = s.absolute_path
+             AND fl.location_status = 'ACTIVE'
+             AND fl.sha512 <> s.sha512
+            """
+        ).fetchone()
+        conflicts = int(conflicts_row["count"] if conflicts_row else 0)
+
+        project.execute(
+            """
+            INSERT INTO file_location
+                (sha512, absolute_path, file_size, modified_at, location_status, last_seen_execution_id)
+            SELECT s.sha512, s.absolute_path, s.file_size, NULL, 'ACTIVE', NULL
+            FROM alldup_import_stage s
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM file_location fl
+                WHERE fl.absolute_path = s.absolute_path
+                  AND fl.location_status = 'ACTIVE'
+                  AND fl.sha512 <> s.sha512
+            )
+            ON CONFLICT(sha512, absolute_path) DO UPDATE SET
+                file_size = excluded.file_size,
+                location_status = 'ACTIVE'
+            """
+        )
+        imported_locations = int(
+            project.execute("SELECT COUNT(*) AS count FROM alldup_import_stage").fetchone()["count"]
+        ) - conflicts
+        return len(files), max(0, imported_locations), conflicts
 
     @staticmethod
     def _normalize_sha512(value: object) -> str:
@@ -240,9 +244,8 @@ class AllDupFullImporter:
         if isinstance(value, memoryview):
             value = value.tobytes()
         if isinstance(value, bytes):
-            digest = value.hex().lower()
-        else:
-            digest = str(value).strip().lower()
+            value = value.hex()
+        digest = str(value).strip().lower()
         if len(digest) != 128 or any(ch not in "0123456789abcdef" for ch in digest):
             return ""
         return digest
@@ -270,18 +273,14 @@ def main(argv: list[str] | None = None) -> int:
     def progress(current: int, total: int, imported: int, conflicts: int) -> None:
         if total:
             print(
-                f"\rAllDup import: {current:,}/{total:,} "
-                f"({current / total * 100:6.2f}%) | imported {imported:,} | conflicts {conflicts:,}",
+                f"\rAllDup import: {current:,}/{total:,} ({current / total * 100:6.2f}%) "
+                f"| imported locations {imported:,} | conflicts {conflicts:,}",
                 end="",
                 flush=True,
             )
 
     try:
-        stats = importer.run(
-            sample_size=args.sample,
-            apply=args.apply,
-            progress_callback=progress,
-        )
+        stats = importer.run(sample_size=args.sample, apply=args.apply, progress_callback=progress)
     except (OSError, sqlite3.Error, ValueError) as exc:
         print(f"\nERROR: {exc}")
         return 1
@@ -291,10 +290,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Source rows: {stats.source_rows:,}")
     print(f"Valid rows: {stats.valid_rows:,}")
     print(f"Invalid rows: {stats.invalid_rows:,}")
-    print(f"Unique SHA-512 files: {stats.unique_files:,}")
-    print(f"Unique locations: {stats.unique_locations:,}")
-    print(f"Imported file records: {stats.imported_files:,}")
-    print(f"Imported locations: {stats.imported_locations:,}")
+    print(f"Unique SHA-512 files in project DB: {stats.unique_files:,}")
+    print(f"Unique locations in project DB: {stats.unique_locations:,}")
+    print(f"Imported file records (batch rows): {stats.imported_files:,}")
+    print(f"Imported locations (batch rows): {stats.imported_locations:,}")
     print(f"Path conflicts skipped: {stats.conflicts:,}")
     print(f"Elapsed: {stats.elapsed_seconds:.3f}s")
     print("Mode: APPLY — Scanner DB was updated." if args.apply else "Mode: DRY-RUN — Scanner DB was not modified.")
