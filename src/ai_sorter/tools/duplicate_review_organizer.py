@@ -2,8 +2,8 @@
 
 The AllDup database is read-only. By default this is a dry-run; --apply physically
 moves files into numbered review folders. Every move verifies the source against the
-AllDup SHA-512 before making the move. Cross-volume moves additionally verify the
-copied destination before deleting the source.
+AllDup SHA-512 before changing the destination. Source deletion happens only after
+an independently verified destination exists.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from typing import Iterator
 
 ALLDUP_SHA512_CTYPE = 5
 COPY_BUFFER_SIZE = 1024 * 1024
+TEMP_SUFFIX = ".ai-sorter-partial"
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,41 +213,41 @@ class DuplicateReviewOrganizer:
             )
         source_sha = self._sha512_file(source)
         if source_sha != item.sha512:
-            raise RuntimeError(
-                "SHA-512 źródła nie zgadza się z AllDup; pliku nie przeniesiono."
-            )
+            raise RuntimeError("SHA-512 źródła nie zgadza się z AllDup; pliku nie przeniesiono.")
 
     def _move_verified(self, item: DuplicateFile, target: Path) -> None:
-        """Verify source, then move. Cross-volume moves verify destination before deleting source."""
+        """Copy and verify before finalizing destination; delete source only after success."""
         source = item.source
         target.parent.mkdir(parents=True, exist_ok=True)
         self._verify_source(item)
 
-        try:
-            os.replace(source, target)
-            # Same-volume os.replace is atomic, but verify the moved file before reporting success.
-            if target.stat().st_size != item.size or self._sha512_file(target) != item.sha512:
-                raise RuntimeError("Przeniesiony plik nie przechodzi weryfikacji SHA-512.")
-            return
-        except OSError as exc:
-            if getattr(exc, "winerror", None) != 17 and exc.errno != 18:
-                raise
-
-        temp_target = target.with_name(target.name + ".ai-sorter-partial")
+        # Never remove/replace the source before a verified destination exists.
+        # The temporary file lives next to the final target so finalization remains atomic.
+        temp_target = target.with_name(target.name + TEMP_SUFFIX)
         temp_target.unlink(missing_ok=True)
         try:
             shutil.copyfile(source, temp_target)
             actual_size = temp_target.stat().st_size
             if actual_size != item.size:
-                raise RuntimeError(f"Rozmiar pliku docelowego ({actual_size}) nie zgadza się z AllDup ({item.size}).")
+                raise RuntimeError(
+                    f"Rozmiar pliku docelowego ({actual_size}) nie zgadza się z AllDup ({item.size})."
+                )
             destination_sha512 = self._sha512_file(temp_target)
             if destination_sha512 != item.sha512:
-                raise RuntimeError("SHA-512 pliku docelowego nie zgadza się z checksumem AllDup; źródło pozostawiono bez zmian.")
+                raise RuntimeError(
+                    "SHA-512 pliku docelowego nie zgadza się z checksumem AllDup; źródło pozostawiono bez zmian."
+                )
+            if target.exists():
+                raise RuntimeError(f"Cel pojawił się podczas operacji: {target}; źródło pozostawiono bez zmian.")
             os.replace(temp_target, target)
+            # The destination has already been verified. If deletion fails, keeping both
+            # copies is safer than deleting anything else or reporting a false move.
             try:
                 source.unlink()
             except OSError as exc:
-                raise RuntimeError(f"Cel został zweryfikowany, ale nie udało się usunąć źródła: {exc}") from exc
+                raise RuntimeError(
+                    f"Cel został zweryfikowany, ale nie udało się usunąć źródła; oba pliki pozostawiono: {exc}"
+                ) from exc
         finally:
             temp_target.unlink(missing_ok=True)
 
