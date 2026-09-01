@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-sorter"
+version = "0.1.0"
+description = "Offline AI-assisted image collection management system"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "PySide6>=6.7,<7",
+    "Pillow>=12.3,<13",
+]
+
+[project.scripts]
+ai-sorter = "ai_sorter.main:main"
+ai-sorter-alldup-sha512 = "ai_sorter.alldup_sha512_compare:main"
+ai-sorter-alldup-details = "ai_sorter.alldup_checksum_details:main"
+ai-sorter-alldup-import = "ai_sorter.alldup_sha512_import:main"
+ai-sorter-alldup-full-import = "ai_sorter.alldup_full_import:main"
+ai-sorter-duplicate-review = "ai_sorter.tools.duplicate_review_organizer:main"
+ai-sorter-image-dimensions = "ai_sorter.image_dimensions_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
