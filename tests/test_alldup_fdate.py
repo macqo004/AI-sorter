@@ -53,6 +53,7 @@ def _as_epoch_seconds(value: object) -> float | None:
     return parsed.timestamp()
 
 
+@unittest.skipUnless(os.environ.get("ALLDUP_DB"), "Set ALLDUP_DB to run the real AllDup fdate integration test")
 class AllDupFdateTests(unittest.TestCase):
     """Integration test against a real AllDup checksum database.
 
