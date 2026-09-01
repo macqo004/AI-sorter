@@ -17,7 +17,7 @@ from .models import (
     ModuleRecord,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 2
 
 
 class DatabaseError(RuntimeError):
@@ -93,18 +93,16 @@ class Database:
             connection.execute(
                 """
                 INSERT INTO file_record
-                    (sha512, size_bytes, width_px, height_px, modified_at, created_at, status)
-                VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
+                    (sha512, size_bytes, modified_at, created_at, status)
+                VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?)
                 ON CONFLICT(sha512) DO UPDATE SET
                     size_bytes = excluded.size_bytes,
-                    width_px = COALESCE(excluded.width_px, file_record.width_px),
-                    height_px = COALESCE(excluded.height_px, file_record.height_px),
                     modified_at = excluded.modified_at,
                     status = excluded.status
                 """,
                 (
-                    record.sha512.lower(), record.size_bytes, record.width_px, record.height_px,
-                    self._iso(record.modified_at), self._iso(record.created_at), record.status,
+                    record.sha512.lower(), record.size_bytes, self._iso(record.modified_at),
+                    self._iso(record.created_at), record.status,
                 ),
             )
             connection.commit()
@@ -282,15 +280,7 @@ class Database:
                     UPDATE schema_metadata SET schema_version = 2 WHERE id = 1;
                     """
                 )
-                current = 2
-            if current < 3:
-                columns = {row["name"] for row in connection.execute("PRAGMA table_info(file_record)").fetchall()}
-                if "width_px" not in columns:
-                    connection.execute("ALTER TABLE file_record ADD COLUMN width_px INTEGER")
-                if "height_px" not in columns:
-                    connection.execute("ALTER TABLE file_record ADD COLUMN height_px INTEGER")
-                connection.execute("UPDATE schema_metadata SET schema_version = 3 WHERE id = 1")
-            connection.commit()
+                connection.commit()
         except sqlite3.Error as exc:
             connection.rollback()
             raise DatabaseError("Nie udało się zaktualizować schematu bazy danych projektu. Baza nie została pozostawiona w częściowo zmigrowanym stanie.") from exc
