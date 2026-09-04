@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from ..core.simimages_data_analyzer import SimImagesDataAnalyzer
+from ..core.simimages_filesystem_probe import SimImagesFilesystemProbe
 from ..core.simimages_inspector import SimImagesDatabaseInspector
 from .main_window_dimensions import MainWindow as BaseMainWindow
 
@@ -59,11 +60,17 @@ class MainWindow(BaseMainWindow):
                 max_preview_bytes=64,
                 sample_display_count=10,
             )
+            filesystem_analysis = SimImagesFilesystemProbe().analyze(
+                database_path,
+                sample_size=1000,
+                max_rows_to_probe=5000,
+                blob_sample_size=20,
+            )
 
             report = inspection.format_text()
             extra_sections = [
                 result.format_text()
-                for result in (blob_analysis, time_analysis)
+                for result in (blob_analysis, time_analysis, filesystem_analysis)
                 if result is not None
             ]
             if extra_sections:
@@ -73,7 +80,7 @@ class MainWindow(BaseMainWindow):
             dialog.setWindowTitle("SimImages database inspection")
             dialog.setText(
                 "Baza została odczytana w trybie tylko do odczytu.\n"
-                "Dodatkowo przeanalizowano próbkę m.data i m.time."
+                "Sprawdzono także próbkę istniejących plików na dysku."
             )
             dialog.setDetailedText(report)
             dialog.exec()
