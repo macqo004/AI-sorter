@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
-from typing import Any
 from pathlib import Path
 
 from ai_sorter.core.simimages_dimension_spy import SimImagesDimensionSpy
@@ -14,6 +13,8 @@ from ai_sorter.core.simimages_dimension_spy import SimImagesDimensionSpy
 # the 50k IDs produced by the whole-cache stratified sampler. Keep IN() below
 # that limit by issuing several bounded queries and merging the rows.
 _SQL_VARIABLE_CHUNK = 500
+_FAST_CACHE_ROWS = 2_000
+_FAST_FILES = 100
 
 
 def _sample_cache_rows_chunked(
@@ -93,19 +94,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also calculate SHA-512 for the small inspected sample",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            f"Fast exploratory run: at most {_FAST_CACHE_ROWS:,} cache rows and "
+            f"{_FAST_FILES} readable images; SHA-512 is disabled."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     _install_chunked_sampler()
     args = build_parser().parse_args(argv)
+    files = args.files
+    cache_rows = args.cache_rows
+    sha512 = args.sha512
+    if args.fast:
+        files = min(files, _FAST_FILES)
+        cache_rows = min(cache_rows, _FAST_CACHE_ROWS)
+        sha512 = False
+        print(
+            f"FAST MODE: max {cache_rows:,} cache rows, max {files} readable images, SHA-512 disabled"
+        )
     try:
         result = SimImagesDimensionSpy().analyze(
             args.database,
-            requested_files=args.files,
-            max_cache_rows=args.cache_rows,
+            requested_files=files,
+            max_cache_rows=cache_rows,
             sample_display_count=args.display,
-            compute_sha512=args.sha512,
+            compute_sha512=sha512,
         )
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         print(f"ERROR: {exc}")
