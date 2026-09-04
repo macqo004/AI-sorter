@@ -150,6 +150,11 @@ def _float_range_text(value: tuple[float, float] | None) -> str:
     return f"{value[0]:.6g}..{value[1]:.6g}"
 
 
+def _finite_range(values: list[float]) -> tuple[float, float] | None:
+    finite = [value for value in values if math.isfinite(value)]
+    return (min(finite), max(finite)) if finite else None
+
+
 class SimImagesDimensionSpy:
     """Sample the whole SimImages cache and inspect the 84-byte payload."""
 
@@ -249,10 +254,6 @@ class SimImagesDimensionSpy:
                     seen_sizes.add(result.cache_size)
             else:
                 deferred.append(result)
-            if len(results) >= requested_files:
-                # We already have a diverse set, but continue collecting sampled
-                # records for the statistical byte analysis.
-                continue
 
         if len(results) < requested_files:
             for result in deferred:
@@ -262,8 +263,6 @@ class SimImagesDimensionSpy:
                     results.append(result)
                     seen_ids.add(result.row_id)
 
-        # Build the statistical population from every readable sampled record,
-        # not merely the printed diverse subset.
         byte_stats = self._build_byte_stats(all_records)
         scalar_hits = self._find_scalar_hits(all_records)
 
@@ -298,23 +297,25 @@ class SimImagesDimensionSpy:
                 f"""SELECT {columns} FROM m JOIN f ON f.id=m.fid JOIN d ON d.id=f.did ORDER BY m.id"""
             ).fetchall()
 
-        # Deterministic stratified sampling across the complete id range. This
-        # avoids bias toward the newest DuplicateReview records while still
-        # keeping SQL bounded and reproducible.
         min_id, max_id = connection.execute("SELECT MIN(id), MAX(id) FROM m").fetchone()
         if min_id is None or max_id is None:
             return []
         step = (int(max_id) - int(min_id)) / float(limit)
-        ids: list[int] = []
-        for index in range(limit):
-            ids.append(int(round(int(min_id) + index * step)))
+        ids = [int(round(int(min_id) + index * step)) for index in range(limit)]
         unique_ids = sorted(set(ids))
-        placeholders = ",".join("?" for _ in unique_ids)
-        return connection.execute(
-            f"""SELECT {columns} FROM m JOIN f ON f.id=m.fid JOIN d ON d.id=f.did
-                WHERE m.id IN ({placeholders}) ORDER BY m.id""",
-            tuple(unique_ids),
-        ).fetchall()
+
+        rows: list[sqlite3.Row] = []
+        chunk_size = 500
+        for start in range(0, len(unique_ids), chunk_size):
+            chunk = unique_ids[start : start + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(connection.execute(
+                f"""SELECT {columns} FROM m JOIN f ON f.id=m.fid JOIN d ON d.id=f.did
+                    WHERE m.id IN ({placeholders}) ORDER BY m.id""",
+                tuple(chunk),
+            ).fetchall())
+        rows.sort(key=lambda row: int(row["mid"]))
+        return rows
 
     @staticmethod
     def _count_m_rows(connection: sqlite3.Connection) -> int | None:
@@ -393,28 +394,20 @@ class SimImagesDimensionSpy:
             "height-1": lambda w, h: h - 1,
         }
         hits: list[str] = []
+        integer_endians = ((16, "little"), (16, "big"), (32, "little"), (32, "big"), (64, "little"), (64, "big"))
         for name, function in derived.items():
             target = [function(r[1], r[2]) for r in records]
             for offset in range(84):
-                for bits, endian in ((16, "le"), (16, "be"), (32, "le"), (32, "be"), (64, "le"), (64, "be")):
+                for bits, byteorder in integer_endians:
                     size = bits // 8
                     if offset + size > 84:
                         continue
-                    observed: list[float] = []
-                    valid = True
-                    for r in records:
-                        blob = r[3]
-                        if bits == 16:
-                            value = int.from_bytes(blob[offset : offset + size], endian)
-                        elif bits == 32:
-                            value = int.from_bytes(blob[offset : offset + size], endian)
-                        else:
-                            value = int.from_bytes(blob[offset : offset + size], endian)
-                        observed.append(float(value))
-                    if observed == target:
-                        hits.append(f"{name} = uint{bits}_{endian} at offset {offset}")
-        # Float exact equality is useful for deliberately stored dimensions/scalars,
-        # but only test numerically sensible derived values.
+                    observed = [
+                        int.from_bytes(r[3][offset : offset + size], byteorder)
+                        for r in records
+                    ]
+                    if all(float(a) == float(b) for a, b in zip(observed, target)):
+                        hits.append(f"{name} = uint{bits}_{'le' if byteorder == 'little' else 'be'} at offset {offset}")
         for name, function in derived.items():
             target = [function(r[1], r[2]) for r in records]
             for offset in range(0, 81, 4):
@@ -490,7 +483,9 @@ class SimImagesDimensionSpy:
         flags = ctypes.c_uint32()
         filesystem_name = ctypes.create_unicode_buffer(261)
         volume_name = ctypes.create_unicode_buffer(261)
-        if not func(root, volume_name, len(volume_name), ctypes.byref(serial), ctypes.byref(max_component), ctypes.byref(flags), filesystem_name, len(filesystem_name)):
+        if not func(root, volume_name, len(volume_name), ctypes.byref(serial),
+                    ctypes.byref(max_component), ctypes.byref(flags),
+                    filesystem_name, len(filesystem_name)):
             return None
         return int(serial.value)
 
@@ -510,7 +505,8 @@ class SimImagesDimensionSpy:
 
     @staticmethod
     def _combine_path(root: str, folder: str, file_name: str) -> str:
-        return str(Path(root) / folder.replace("/", "\\").lstrip("\\/") / file_name.replace("/", "\\").lstrip("\\/"))
+        return str(Path(root) / folder.replace("/", "\\").lstrip("\\/") /
+                   file_name.replace("/", "\\").lstrip("\\/"))
 
     @staticmethod
     def _as_int(value: Any) -> int | None:
@@ -526,8 +522,3 @@ class SimImagesDimensionSpy:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
-
-
-def _finite_range(values: list[float]) -> tuple[float, float] | None:
-    finite = [x for x in values if math.isfinite(x)]
-    return (min(finite), max(finite)) if finite else None
