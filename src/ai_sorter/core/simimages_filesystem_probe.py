@@ -35,6 +35,7 @@ class SimImagesFilesystemAnalysis:
     existing_files: int
     missing_files: int
     unresolved_drives: int
+    invalid_text_rows: int
     size_matches: int
     time_matches: int
     size_and_time_matches: int
@@ -49,6 +50,7 @@ class SimImagesFilesystemAnalysis:
             f"Files currently existing: {self.existing_files:,}",
             f"Files missing: {self.missing_files:,}",
             f"Unresolved drive records: {self.unresolved_drives:,}",
+            f"Invalid text rows: {self.invalid_text_rows:,}",
             f"Size matches: {self.size_matches:,}",
             f"Timestamp matches: {self.time_matches:,}",
             f"Size + timestamp matches: {self.size_and_time_matches:,}",
@@ -78,7 +80,8 @@ class SimImagesFilesystemAnalysis:
         lines.append("")
         lines.append(
             "Safety: the SimImages database is opened read-only. "
-            "Filesystem verification uses metadata only (stat); file contents are never read."
+            "Filesystem verification uses metadata only (stat); file contents are never read. "
+            "Invalid TEXT/BLOB path values are reported and skipped, never allowed to abort the analysis."
         )
         return "\n".join(lines)
 
@@ -107,6 +110,9 @@ class SimImagesFilesystemProbe:
         try:
             connection = sqlite3.connect(uri, uri=True, timeout=10)
             connection.row_factory = sqlite3.Row
+            # SimImages cache may contain legacy/non-UTF-8 TEXT values. Read TEXT
+            # as raw bytes so one corrupt/legacy filename cannot abort the scan.
+            connection.text_factory = bytes
             try:
                 rows = connection.execute(
                     """
@@ -135,16 +141,46 @@ class SimImagesFilesystemProbe:
             ) from exc
 
         drive_map = self._build_drive_map()
-        inspected = existing = missing = unresolved = 0
-        size_matches = time_matches = size_time_matches = 0
+        inspected = 0
+        existing = 0
+        missing = 0
+        unresolved = 0
+        invalid_text = 0
+        size_matches = 0
+        time_matches = 0
+        size_time_matches = 0
         result_rows: list[SimImagesFilesystemRow] = []
         blob_samples: list[tuple[int, str, int, str]] = []
 
         for row in rows:
             inspected += 1
-            drive_record = str(row["drive_record"] or "")
-            folder = str(row["folder"] or "")
-            file_name = str(row["file_name"] or "")
+
+            drive_record = self._decode_text(row["drive_record"])
+            folder = self._decode_text(row["folder"])
+            file_name = self._decode_text(row["file_name"])
+
+            if drive_record is None or folder is None or file_name is None:
+                invalid_text += 1
+                result_rows.append(
+                    SimImagesFilesystemRow(
+                        row_id=int(row["mid"]),
+                        drive_record=drive_record or "<invalid text>",
+                        folder=folder or "<invalid text>",
+                        file_name=file_name or "<invalid text>",
+                        resolved_path=None,
+                        cache_size=self._as_int(row["cache_size"]),
+                        actual_size=None,
+                        cache_time=self._as_int(row["cache_time"]),
+                        actual_time_ns=None,
+                        status="INVALID TEXT",
+                    )
+                )
+                if len(result_rows) >= sample_size:
+                    # Keep inspecting up to max_rows_to_probe so invalid legacy
+                    # rows do not consume the entire existing-file sample.
+                    pass
+                continue
+
             root = self._resolve_drive_root(drive_record, drive_map)
             resolved = self._combine_path(root, folder, file_name) if root else None
 
@@ -187,7 +223,7 @@ class SimImagesFilesystemProbe:
                         blob = bytes(data)
                         blob_samples.append((int(row["mid"]), file_name, len(blob), blob.hex()))
 
-            if len(result_rows) < sample_size and (resolved is not None or unresolved <= 10):
+            if len(result_rows) < sample_size:
                 result_rows.append(
                     SimImagesFilesystemRow(
                         row_id=int(row["mid"]),
@@ -212,12 +248,33 @@ class SimImagesFilesystemProbe:
             existing_files=existing,
             missing_files=missing,
             unresolved_drives=unresolved,
+            invalid_text_rows=invalid_text,
             size_matches=size_matches,
             time_matches=time_matches,
             size_and_time_matches=size_time_matches,
             rows=tuple(result_rows),
             blob_samples=tuple(blob_samples),
         )
+
+    @staticmethod
+    def _decode_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raw = bytes(value)
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                # Some legacy database values may use a Windows code page.
+                # Decode losslessly enough for display, but only a valid UTF-8
+                # value is considered safe for filesystem path resolution.
+                try:
+                    return raw.decode("cp1252")
+                except UnicodeDecodeError:
+                    return None
+        return str(value)
 
     @staticmethod
     def _build_drive_map() -> dict[str, str]:
