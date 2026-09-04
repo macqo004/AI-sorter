@@ -4,8 +4,8 @@ import unittest
 
 from ai_sorter.core.simimages_blob_similarity_spy import (
     BlobSimilarityPair,
-    SimImagesBlobSimilaritySpy,
     _blob_distance,
+    _pair_key,
     _pearson,
     _spearman,
     _visual_distance,
@@ -39,10 +39,7 @@ class SimImagesBlobSimilaritySpyTests(unittest.TestCase):
     def test_pair_key_is_order_independent(self) -> None:
         first = BlobSimilarityPair(20, 10, 0.2, 0.3)
         second = BlobSimilarityPair(10, 20, 0.2, 0.3)
-        self.assertEqual(
-            SimImagesBlobSimilaritySpy._analyze_pair_key(first),
-            SimImagesBlobSimilaritySpy._analyze_pair_key(second),
-        )
+        self.assertEqual(_pair_key(first), _pair_key(second))
 
 
 if __name__ == "__main__":
