@@ -21,6 +21,7 @@ ai-sorter-alldup-import = "ai_sorter.alldup_sha512_import:main"
 ai-sorter-alldup-full-import = "ai_sorter.alldup_full_import:main"
 ai-sorter-duplicate-review = "ai_sorter.tools.duplicate_review_organizer:main"
 ai-sorter-image-dimensions = "ai_sorter.image_dimensions_cli:main"
+ai-sorter-simimages-dimension-spy = "ai_sorter.simimages_dimension_spy_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
