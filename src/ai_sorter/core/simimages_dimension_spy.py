@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import math
 import os
 import re
 import sqlite3
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,12 +32,20 @@ class DimensionSpyRow:
 
 
 @dataclass(frozen=True, slots=True)
-class DimensionMatch:
+class FieldMatch:
     offset: int
-    width_endian: str
-    height_endian: str
+    field: str
+    encoding: str
     matches: int
+    total: int
     examples: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ByteCorrelation:
+    offset: int
+    field: str
+    correlation: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,12 +56,13 @@ class DimensionSpyResult:
     readable_images: int
     errors: int
     rows: tuple[DimensionSpyRow, ...]
-    matches: tuple[DimensionMatch, ...]
+    field_matches: tuple[FieldMatch, ...]
+    byte_correlations: tuple[ByteCorrelation, ...]
     sha_enabled: bool
 
     def format_text(self) -> str:
         lines = [
-            "SimImages dimension/fingerprint spy",
+            "SimImages dimension/fingerprint reverse-engineering spy",
             f"Requested files: {self.requested_files:,}",
             f"Cache rows inspected: {self.cache_rows_inspected:,}",
             f"Existing files: {self.existing_files:,}",
@@ -59,16 +70,26 @@ class DimensionSpyResult:
             f"Errors: {self.errors:,}",
             f"SHA-512: {'enabled' if self.sha_enabled else 'disabled'}",
             "",
-            "Dimension/fingerprint correlations:",
+            "Exact scalar correlations inside m.data:",
         ]
-        if not self.matches:
-            lines.append("  No exact width/height byte-field correlation found.")
+        if not self.field_matches:
+            lines.append("  No repeated exact width/height/derived-field encoding found.")
         else:
-            for match in self.matches:
-                examples = "; ".join(match.examples)
+            for match in self.field_matches:
+                example_text = "; ".join(match.examples)
                 lines.append(
-                    f"  offset={match.offset} | width={match.width_endian} | "
-                    f"height={match.height_endian} | matches={match.matches} | {examples}"
+                    f"  offset={match.offset:02d} | field={match.field} | "
+                    f"encoding={match.encoding} | matches={match.matches}/{match.total} | {example_text}"
+                )
+
+        lines.append("")
+        lines.append("Strong per-byte correlations with dimensions:")
+        if not self.byte_correlations:
+            lines.append("  No strong byte/value correlation found (|r| >= 0.95).")
+        else:
+            for item in self.byte_correlations:
+                lines.append(
+                    f"  offset={item.offset:02d} | field={item.field} | r={item.correlation:+.5f}"
                 )
 
         lines.append("")
@@ -90,7 +111,7 @@ class DimensionSpyResult:
 
 
 class SimImagesDimensionSpy:
-    """Find existing cache files, read dimensions, and correlate them with m.data."""
+    """Find existing cache files and empirically probe m.data for dimension-related fields."""
 
     def analyze(
         self,
@@ -130,17 +151,17 @@ class SimImagesDimensionSpy:
 
         drive_map = self._build_drive_map()
         selected: list[DimensionSpyRow] = []
-        seen_dimensions: set[tuple[int, int]] = set()
+        selected_ids: set[int] = set()
+        seen_dimension_pairs: set[tuple[int, int]] = set()
         seen_sizes: set[int] = set()
+        seen_formats: set[str] = set()
         cache_inspected = 0
         existing = 0
         readable = 0
         errors = 0
-        raw_payloads: list[tuple[int, int, int, bytes]] = []
+        raw_records: list[tuple[int, int, int, int | None, bytes]] = []
+        deferred: list[DimensionSpyRow] = []
 
-        # First pass favors different cache sizes/dimensions. This avoids filling the
-        # sample with one large duplicate set such as the user's SHA-identical groups.
-        candidates: list[tuple[Any, str, bytes]] = []
         for row in rows:
             cache_inspected += 1
             drive = self._decode_text(row["drive_record"])
@@ -155,19 +176,14 @@ class SimImagesDimensionSpy:
             data = row["data"]
             if not isinstance(data, (bytes, bytearray, memoryview)):
                 continue
-            payload = bytes(data)
             try:
-                if Path(path).is_file():
-                    candidates.append((row, path, payload))
+                if not Path(path).is_file():
+                    continue
             except OSError:
                 continue
-            if len(candidates) >= max_cache_rows:
-                break
 
-        def inspect_candidate(item: tuple[Any, str, bytes]) -> DimensionSpyRow | None:
-            nonlocal existing, readable, errors
-            row, path, payload = item
             existing += 1
+            payload = bytes(data)
             try:
                 with Image.open(path) as image:
                     width, height = image.size
@@ -175,10 +191,11 @@ class SimImagesDimensionSpy:
                     image.verify()
             except Exception:
                 errors += 1
-                return None
+                continue
+
             readable += 1
             sha = self._sha512(path) if compute_sha512 else None
-            return DimensionSpyRow(
+            result = DimensionSpyRow(
                 row_id=int(row["mid"]),
                 path=path,
                 cache_size=self._as_int(row["cache_size"]),
@@ -190,88 +207,199 @@ class SimImagesDimensionSpy:
                 sha512=sha,
             )
 
-        # Prefer unique (dimension, size) pairs, but fall back to any readable files.
-        deferred: list[DimensionSpyRow] = []
-        for item in candidates:
-            result = inspect_candidate(item)
-            if result is None:
-                continue
-            if len(selected) < requested_files and (
-                (result.width, result.height) not in seen_dimensions
+            dimension_key = (result.width, result.height)
+            format_key = result.format or "?"
+            is_diverse = (
+                dimension_key not in seen_dimension_pairs
                 or result.cache_size not in seen_sizes
-            ):
+                or format_key not in seen_formats
+            )
+            if is_diverse and len(selected) < requested_files:
                 selected.append(result)
-                seen_dimensions.add((result.width, result.height))
+                selected_ids.add(result.row_id)
+                seen_dimension_pairs.add(dimension_key)
                 if result.cache_size is not None:
                     seen_sizes.add(result.cache_size)
-                raw_payloads.append((result.row_id, result.width, result.height, bytes.fromhex(result.blob_hex)))
-            else:
+                seen_formats.add(format_key)
+                raw_records.append(
+                    (result.row_id, result.width, result.height, result.cache_size, payload)
+                )
+            elif len(deferred) < requested_files * 4:
                 deferred.append(result)
+
             if len(selected) >= requested_files:
                 break
 
         if len(selected) < requested_files:
             for result in deferred:
-                if len(selected) >= requested_files:
+                if len(selected) >= requested_files or result.row_id in selected_ids:
                     break
-                if result.row_id in {row.row_id for row in selected}:
-                    continue
                 selected.append(result)
-                raw_payloads.append((result.row_id, result.width, result.height, bytes.fromhex(result.blob_hex)))
+                selected_ids.add(result.row_id)
+                raw_records.append(
+                    (
+                        result.row_id,
+                        result.width,
+                        result.height,
+                        result.cache_size,
+                        bytes.fromhex(result.blob_hex),
+                    )
+                )
 
-        matches = self._find_dimension_correlations(raw_payloads)
-        display_rows = tuple(selected[:sample_display_count])
+        field_matches = self._find_scalar_correlations(raw_records)
+        byte_correlations = self._find_byte_correlations(raw_records)
         return DimensionSpyResult(
             requested_files=requested_files,
             cache_rows_inspected=cache_inspected,
             existing_files=existing,
             readable_images=readable,
             errors=errors,
-            rows=display_rows,
-            matches=matches,
+            rows=tuple(selected[:sample_display_count]),
+            field_matches=field_matches,
+            byte_correlations=byte_correlations,
             sha_enabled=compute_sha512,
         )
 
     @staticmethod
-    def _find_dimension_correlations(
-        records: list[tuple[int, int, int, bytes]],
-    ) -> tuple[DimensionMatch, ...]:
+    def _find_scalar_correlations(
+        records: list[tuple[int, int, int, int | None, bytes]],
+    ) -> tuple[FieldMatch, ...]:
         if not records:
             return ()
-        result: list[DimensionMatch] = []
-        for width_endian in ("le", "be"):
-            for height_endian in ("le", "be"):
-                for offset in range(0, 81, 2):
-                    matches = 0
+
+        encodings: tuple[tuple[str, int, str], ...] = (
+            ("u8", 1, "B"),
+            ("u16le", 2, "H_le"),
+            ("u16be", 2, "H_be"),
+            ("u32le", 4, "I_le"),
+            ("u32be", 4, "I_be"),
+            ("u64le", 8, "Q_le"),
+            ("u64be", 8, "Q_be"),
+            ("f32le", 4, "f_le"),
+            ("f32be", 4, "f_be"),
+            ("f64le", 8, "d_le"),
+            ("f64be", 8, "d_be"),
+        )
+        fields: tuple[tuple[str, tuple[int, int, int | None, int]], ...] = tuple(
+            (
+                "width",
+                (width, height, size, 0),
+            )
+            for _, width, height, size, _ in records
+        )
+        # Use a compact per-record tuple for field values. Derived values are
+        # deliberately included because a fingerprint might store normalized area
+        # or a dimension-derived scalar rather than raw width/height.
+        values_by_name: dict[str, list[float]] = {
+            "width": [float(r[1]) for r in records],
+            "height": [float(r[2]) for r in records],
+            "area": [float(r[1] * r[2]) for r in records],
+            "aspect_ratio": [float(r[1] / r[2]) if r[2] else math.nan for r in records],
+        }
+        if all(r[3] is not None for r in records):
+            values_by_name["file_size"] = [float(r[3]) for r in records]
+
+        total = len(records)
+        matches: list[FieldMatch] = []
+        # Only accept repeated matches; one accidental byte sequence is not useful.
+        minimum_matches = max(3, math.ceil(total * 0.25))
+
+        for offset in range(0, 84):
+            for encoding, width_bytes, decoder in encodings:
+                for field_name, expected_values in values_by_name.items():
+                    if offset + width_bytes > 84:
+                        continue
+                    count = 0
                     examples: list[str] = []
-                    for row_id, width, height, blob in records:
-                        if offset + 4 > len(blob):
+                    for index, (row_id, _, _, _, blob) in enumerate(records):
+                        observed = SimImagesDimensionSpy._decode_scalar(blob[offset : offset + width_bytes], decoder)
+                        if observed is None or not math.isfinite(observed):
                             continue
-                        w4 = blob[offset : offset + 4]
-                        h4 = blob[offset + 4 : offset + 8] if offset + 8 <= len(blob) else b""
-                        if width_endian == "le":
-                            observed_width = int.from_bytes(w4, "little")
+                        expected = expected_values[index]
+                        if field_name == "aspect_ratio":
+                            ok = math.isclose(observed, expected, rel_tol=1e-6, abs_tol=1e-6)
                         else:
-                            observed_width = int.from_bytes(w4, "big")
-                        if height_endian == "le":
-                            observed_height = int.from_bytes(h4, "little") if len(h4) == 4 else -1
-                        else:
-                            observed_height = int.from_bytes(h4, "big") if len(h4) == 4 else -1
-                        if observed_width == width and observed_height == height:
-                            matches += 1
+                            ok = math.isclose(observed, expected, rel_tol=0.0, abs_tol=0.0)
+                        if ok:
+                            count += 1
                             if len(examples) < 3:
-                                examples.append(f"id={row_id}:{width}x{height}")
-                    if matches:
-                        result.append(
-                            DimensionMatch(
+                                examples.append(f"id={row_id}:{expected:g}")
+                    if count >= minimum_matches:
+                        matches.append(
+                            FieldMatch(
                                 offset=offset,
-                                width_endian=width_endian,
-                                height_endian=height_endian,
-                                matches=matches,
+                                field=field_name,
+                                encoding=encoding,
+                                matches=count,
+                                total=total,
                                 examples=tuple(examples),
                             )
                         )
-        result.sort(key=lambda item: (-item.matches, item.offset, item.width_endian, item.height_endian))
+
+        matches.sort(key=lambda item: (-item.matches, item.field, item.offset, item.encoding))
+        return tuple(matches[:60])
+
+    @staticmethod
+    def _decode_scalar(raw: bytes, decoder: str) -> float | None:
+        try:
+            if decoder == "B":
+                return float(raw[0])
+            if decoder == "H_le":
+                return float(int.from_bytes(raw, "little"))
+            if decoder == "H_be":
+                return float(int.from_bytes(raw, "big"))
+            if decoder == "I_le":
+                return float(int.from_bytes(raw, "little"))
+            if decoder == "I_be":
+                return float(int.from_bytes(raw, "big"))
+            if decoder == "Q_le":
+                return float(int.from_bytes(raw, "little"))
+            if decoder == "Q_be":
+                return float(int.from_bytes(raw, "big"))
+            fmt = {
+                "f_le": "<f",
+                "f_be": ">f",
+                "d_le": "<d",
+                "d_be": ">d",
+            }[decoder]
+            if len(raw) != struct.calcsize(fmt):
+                return None
+            return float(struct.unpack(fmt, raw)[0])
+        except (IndexError, struct.error, OverflowError):
+            return None
+
+    @staticmethod
+    def _find_byte_correlations(
+        records: list[tuple[int, int, int, int | None, bytes]],
+    ) -> tuple[ByteCorrelation, ...]:
+        if len(records) < 5:
+            return ()
+        result: list[ByteCorrelation] = []
+        fields = {
+            "width": [float(r[1]) for r in records],
+            "height": [float(r[2]) for r in records],
+        }
+        for field_name, ys in fields.items():
+            y_mean = sum(ys) / len(ys)
+            y_dev = [y - y_mean for y in ys]
+            y_norm = math.sqrt(sum(v * v for v in y_dev))
+            if y_norm == 0:
+                continue
+            for offset in range(84):
+                xs = [float(blob[offset]) if offset < len(blob) else math.nan for *_, blob in records]
+                if any(math.isnan(x) for x in xs):
+                    continue
+                x_mean = sum(xs) / len(xs)
+                x_dev = [x - x_mean for x in xs]
+                x_norm = math.sqrt(sum(v * v for v in x_dev))
+                if x_norm == 0:
+                    continue
+                correlation = sum(a * b for a, b in zip(x_dev, y_dev)) / (x_norm * y_norm)
+                if abs(correlation) >= 0.95:
+                    result.append(
+                        ByteCorrelation(offset=offset, field=field_name, correlation=correlation)
+                    )
+        result.sort(key=lambda item: (-abs(item.correlation), item.offset, item.field))
         return tuple(result[:30])
 
     @staticmethod
