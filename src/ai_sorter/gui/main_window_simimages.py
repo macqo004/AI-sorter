@@ -33,7 +33,8 @@ class MainWindow(BaseMainWindow):
 
     def _set_module_controls_enabled(self, enabled: bool) -> None:
         super()._set_module_controls_enabled(enabled)
-        self.simimages_button.setEnabled(enabled)
+        if hasattr(self, "simimages_button"):
+            self.simimages_button.setEnabled(enabled)
 
     def inspect_simimages_database(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
