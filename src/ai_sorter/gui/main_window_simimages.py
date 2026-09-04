@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
+from ..core.simimages_data_analyzer import SimImagesDataAnalyzer
 from ..core.simimages_inspector import SimImagesDatabaseInspector
 from .main_window_dimensions import MainWindow as BaseMainWindow
 
@@ -23,7 +24,6 @@ class MainWindow(BaseMainWindow):
         self.simimages_button = QPushButton("Inspect SimImages database…", self.centralWidget())
         self.simimages_button.clicked.connect(self.inspect_simimages_database)
 
-        # Keep the diagnostic actions together near the existing AllDup controls.
         anchor = getattr(self, "alldup_button", None)
         anchor_index = layout.indexOf(anchor) if anchor is not None else -1
         if anchor_index >= 0:
@@ -47,15 +47,35 @@ class MainWindow(BaseMainWindow):
             return
 
         try:
+            database_path = Path(path)
             inspection = SimImagesDatabaseInspector().inspect(
-                Path(path),
+                database_path,
                 count_rows=False,
                 sample_rows=3,
             )
+            blob_analysis, time_analysis = SimImagesDataAnalyzer().analyze(
+                database_path,
+                sample_size=1000,
+                max_preview_bytes=64,
+                sample_display_count=10,
+            )
+
+            report = inspection.format_text()
+            extra_sections = [
+                result.format_text()
+                for result in (blob_analysis, time_analysis)
+                if result is not None
+            ]
+            if extra_sections:
+                report += "\n\n" + "\n\n".join(extra_sections)
+
             dialog = QMessageBox(self)
             dialog.setWindowTitle("SimImages database inspection")
-            dialog.setText("Baza została odczytana w trybie tylko do odczytu.")
-            dialog.setDetailedText(inspection.format_text())
+            dialog.setText(
+                "Baza została odczytana w trybie tylko do odczytu.\n"
+                "Dodatkowo przeanalizowano próbkę m.data i m.time."
+            )
+            dialog.setDetailedText(report)
             dialog.exec()
         except Exception as exc:
             QMessageBox.critical(self, "SimImages database inspection", str(exc))
