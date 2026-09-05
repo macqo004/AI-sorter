@@ -14,10 +14,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("paths", nargs="+", type=Path, help="Image files to inspect")
     parser.add_argument("--apply", action="store_true", help="Actually create split images; default is preview only")
-    parser.add_argument("--analysis-size", type=int, default=512, help="Maximum analysis dimension")
-    parser.add_argument("--threshold", type=float, default=28.0, help="Average edge threshold")
-    parser.add_argument("--coverage", type=float, default=0.45, help="Minimum strong-edge coverage")
-    parser.add_argument("--min-piece", type=float, default=0.08, help="Minimum piece dimension ratio")
+    parser.add_argument("--analysis-size", type=int, default=768, help="Maximum analysis dimension")
+    parser.add_argument("--threshold", type=float, default=18.0, help="Local edge threshold")
+    parser.add_argument("--coverage", type=float, default=0.25, help="Minimum coherent-edge coverage")
+    parser.add_argument("--min-piece", type=float, default=0.05, help="Minimum piece dimension ratio")
     return parser
 
 
