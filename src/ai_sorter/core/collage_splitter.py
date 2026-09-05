@@ -1,8 +1,15 @@
 """Detect and split rectangular image collages without database writes.
 
-V2 deliberately does not assume that a boundary runs through the whole image.
-For every currently analysed rectangle it looks for locally coherent seams and
-recursively reconstructs the rectangular panels from those seams.
+V2 uses two levels of evidence:
+
+* global seam discovery finds strong, repeated straight boundaries in the
+  complete image and uses them only as positional priors;
+* local seam discovery is performed inside every current rectangle, so a
+  boundary is allowed to exist only over the part of the image where panels
+  actually touch.
+
+This prevents the recursive detector from treating arbitrary image content as
+an equally plausible split while still supporting irregular collage layouts.
 """
 
 from __future__ import annotations
@@ -71,7 +78,17 @@ class CollageSplitter:
             image = ImageOps.exif_transpose(image).convert("RGB")
             width, height = image.size
             scaled = _resize_for_analysis(image, self.analysis_size)
-            rectangles, confidence = self._detect_recursive(scaled, width, height)
+            preferred_vertical, preferred_horizontal = _global_boundaries(
+                scaled,
+                self.edge_threshold,
+            )
+            rectangles, confidence = self._detect_recursive(
+                scaled,
+                width,
+                height,
+                preferred_vertical,
+                preferred_horizontal,
+            )
         return SplitResult(source, width, height, tuple(rectangles), confidence)
 
     def split(self, result: SplitResult, *, apply: bool = False) -> tuple[Path, ...]:
@@ -98,6 +115,8 @@ class CollageSplitter:
         image: Image.Image,
         original_width: int,
         original_height: int,
+        preferred_vertical: list[int],
+        preferred_horizontal: list[int],
     ) -> tuple[list[Rectangle], float]:
         scale_x = original_width / image.width
         scale_y = original_height / image.height
@@ -108,13 +127,17 @@ class CollageSplitter:
         while pending:
             rect = pending.pop()
             crop = image.crop((rect.left, rect.top, rect.right, rect.bottom))
+            local_vertical = [position - rect.left for position in preferred_vertical if rect.left < position < rect.right]
+            local_horizontal = [position - rect.top for position in preferred_horizontal if rect.top < position < rect.bottom]
             split = _best_split(
                 crop,
                 self.edge_threshold,
                 self.coverage_threshold,
                 self.smooth_radius,
+                local_vertical,
+                local_horizontal,
             )
-            if split is None or split.score < 0.30:
+            if split is None or split.score < 0.34:
                 leaves.append(rect)
                 continue
 
@@ -160,11 +183,70 @@ def _resize_for_analysis(image: Image.Image, limit: int) -> Image.Image:
     )
 
 
+def _global_boundaries(image: Image.Image, threshold: float) -> tuple[list[int], list[int]]:
+    """Find straight seam positions that are useful as positional priors.
+
+    These positions are deliberately *not* treated as boundaries by
+    themselves. They only receive a bonus when the same position also has
+    local evidence inside the rectangle being split.
+    """
+    gray = image.convert("L")
+    vertical = _global_axis_candidates(gray, horizontal=False, threshold=threshold)
+    horizontal = _global_axis_candidates(gray, horizontal=True, threshold=threshold)
+    return vertical, horizontal
+
+
+def _global_axis_candidates(
+    gray: Image.Image,
+    *,
+    horizontal: bool,
+    threshold: float,
+) -> list[int]:
+    pixels = gray.load()
+    width, height = gray.size
+    axis_size = height if horizontal else width
+    perpendicular_size = width if horizontal else height
+    if axis_size < 32 or perpendicular_size < 32:
+        return []
+
+    edge_threshold = max(7.0, threshold * 0.45)
+    scores: list[tuple[float, int]] = []
+    for position in range(2, axis_size - 2):
+        changes: list[float] = []
+        for q in range(perpendicular_size):
+            if horizontal:
+                a = pixels[q, position - 1]
+                b = pixels[q, position]
+            else:
+                a = pixels[position - 1, q]
+                b = pixels[position, q]
+            changes.append(abs(a - b))
+
+        coverage = sum(value >= edge_threshold for value in changes) / len(changes)
+        mean = sum(changes) / len(changes)
+        # Mean * coverage strongly favours long straight seams over local
+        # object edges. A seam may still be visually soft, hence the low
+        # threshold here; local reconstruction makes the final decision.
+        score = mean * coverage
+        if coverage >= 0.35 and mean >= edge_threshold:
+            scores.append((score, position))
+
+    candidates: list[tuple[float, int]] = []
+    for score, position in sorted(scores, reverse=True):
+        if all(abs(position - existing) > max(5, axis_size // 200) for _, existing in candidates):
+            candidates.append((score, position))
+        if len(candidates) >= 12:
+            break
+    return sorted(position for _, position in candidates)
+
+
 def _best_split(
     image: Image.Image,
     threshold: float,
     coverage_threshold: float,
     radius: int,
+    preferred_vertical: list[int] | None = None,
+    preferred_horizontal: list[int] | None = None,
 ) -> _Split | None:
     width, height = image.size
     if width < 32 and height < 32:
@@ -190,7 +272,30 @@ def _best_split(
             radius=radius,
         )
     )
-    return max(candidates, key=lambda item: item.score) if candidates else None
+
+    preferred_vertical = preferred_vertical or []
+    preferred_horizontal = preferred_horizontal or []
+    if not candidates:
+        return None
+
+    adjusted: list[_Split] = []
+    for candidate in candidates:
+        preferred = preferred_vertical if candidate.orientation == "vertical" else preferred_horizontal
+        if preferred:
+            distance = min(abs(candidate.position - position) for position in preferred)
+            tolerance = max(3, round((width if candidate.orientation == "vertical" else height) * 0.012))
+            if distance <= tolerance:
+                # Positional agreement with a seam detected in the whole
+                # image is strong anti-overfitting evidence. It never creates
+                # a split unless local edge evidence already exists.
+                candidate = _Split(
+                    candidate.orientation,
+                    candidate.position,
+                    min(1.0, candidate.score + 0.18 * (1.0 - distance / tolerance)),
+                )
+        adjusted.append(candidate)
+
+    return max(adjusted, key=lambda item: item.score)
 
 
 def _boundary_candidates(
@@ -201,13 +306,7 @@ def _boundary_candidates(
     coverage_threshold: float,
     radius: int,
 ) -> list[_Split]:
-    """Find seam candidates using local bins along the seam.
-
-    A collage boundary normally affects a large fraction of the seam, while
-    an object edge (hair, body, weapon, background detail) is usually local.
-    The median bin response suppresses those local false positives.  We keep
-    all plausible local peaks rather than selecting one global line.
-    """
+    """Find locally coherent seam candidates inside one rectangle."""
     pixels = gray.load()
     width, height = gray.size
     axis_size = height if horizontal else width
@@ -262,9 +361,6 @@ def _boundary_candidates(
         baseline = _median(neighbours)
         prominence = value / max(1.0, baseline)
         coherence = coverage[index]
-
-        # Either the seam is coherent across many bins, or it is exceptionally
-        # prominent locally. This is deliberately less strict than V1.
         if coherence < coverage_threshold and prominence < 1.8:
             continue
 
@@ -281,7 +377,6 @@ def _boundary_candidates(
             _Split("horizontal" if horizontal else "vertical", position, score)
         )
 
-    # Nearby peaks are the same physical seam. Keep the strongest one.
     candidates.sort(key=lambda item: item.position)
     merged: list[_Split] = []
     merge_distance = max(2, radius * 2 + 1)
@@ -307,11 +402,13 @@ def _ranges(length: int, count: int) -> list[tuple[int, int]]:
 def _smooth(values: list[float], radius: int) -> list[float]:
     if radius <= 0 or len(values) < 3:
         return values[:]
-    return [
-        sum(values[max(0, index - radius):min(len(values), index + radius + 1)])
-        / len(values[max(0, index - radius):min(len(values), index + radius + 1)])
-        for index in range(len(values))
-    ]
+    result: list[float] = []
+    for index in range(len(values)):
+        start = max(0, index - radius)
+        end = min(len(values), index + radius + 1)
+        window = values[start:end]
+        result.append(sum(window) / len(window))
+    return result
 
 
 def _median(values: list[float]) -> float:
