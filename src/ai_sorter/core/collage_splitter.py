@@ -1,15 +1,10 @@
 """Detect and split rectangular image collages without database writes.
 
-V2 uses two levels of evidence:
-
-* global seam discovery finds strong, repeated straight boundaries in the
-  complete image and uses them only as positional priors;
-* local seam discovery is performed inside every current rectangle, so a
-  boundary is allowed to exist only over the part of the image where panels
-  actually touch.
-
-This prevents the recursive detector from treating arbitrary image content as
-an equally plausible split while still supporting irregular collage layouts.
+V3 treats a collage as a rectangular grid with locally present boundaries.
+It first finds long, coherent candidate seams across the whole image, then
+checks each candidate inside each grid band. Grid cells are finally merged
+where a candidate seam is absent. This avoids recursive splitting of image
+content such as hair, bodies, weapons, or background details.
 """
 
 from __future__ import annotations
@@ -46,28 +41,28 @@ class SplitResult:
 
 
 @dataclass(frozen=True, slots=True)
-class _Split:
-    orientation: str
+class _Line:
     position: int
     score: float
+    coverage: float
 
 
 class CollageSplitter:
-    """Split touching rectangular collage panels using local seam evidence."""
+    """Split touching rectangular collage panels using a global scaffold."""
 
     def __init__(
         self,
         *,
-        analysis_size: int = 768,
+        analysis_size: int = 1024,
         min_piece_ratio: float = 0.05,
         edge_threshold: float = 18.0,
-        coverage_threshold: float = 0.25,
+        coverage_threshold: float = 0.40,
         smooth_radius: int = 2,
     ) -> None:
-        self.analysis_size = max(128, min(1536, int(analysis_size)))
+        self.analysis_size = max(256, min(1536, int(analysis_size)))
         self.min_piece_ratio = max(0.01, min(0.40, float(min_piece_ratio)))
         self.edge_threshold = max(5.0, min(100.0, float(edge_threshold)))
-        self.coverage_threshold = max(0.10, min(0.90, float(coverage_threshold)))
+        self.coverage_threshold = max(0.15, min(0.90, float(coverage_threshold)))
         self.smooth_radius = max(1, min(8, int(smooth_radius)))
 
     def detect(self, path: Path) -> SplitResult:
@@ -78,17 +73,7 @@ class CollageSplitter:
             image = ImageOps.exif_transpose(image).convert("RGB")
             width, height = image.size
             scaled = _resize_for_analysis(image, self.analysis_size)
-            preferred_vertical, preferred_horizontal = _global_boundaries(
-                scaled,
-                self.edge_threshold,
-            )
-            rectangles, confidence = self._detect_recursive(
-                scaled,
-                width,
-                height,
-                preferred_vertical,
-                preferred_horizontal,
-            )
+            rectangles, confidence = self._detect_grid(scaled, width, height)
         return SplitResult(source, width, height, tuple(rectangles), confidence)
 
     def split(self, result: SplitResult, *, apply: bool = False) -> tuple[Path, ...]:
@@ -110,67 +95,107 @@ class CollageSplitter:
                 created.append(destination)
             return tuple(created)
 
-    def _detect_recursive(
+    def _detect_grid(
         self,
         image: Image.Image,
         original_width: int,
         original_height: int,
-        preferred_vertical: list[int],
-        preferred_horizontal: list[int],
     ) -> tuple[list[Rectangle], float]:
-        scale_x = original_width / image.width
-        scale_y = original_height / image.height
-        pending = [Rectangle(0, 0, image.width, image.height)]
-        leaves: list[Rectangle] = []
-        split_scores: list[float] = []
+        gray = image.convert("L")
+        x_lines = _find_global_lines(
+            gray,
+            horizontal=False,
+            threshold=self.edge_threshold,
+            coverage_threshold=self.coverage_threshold,
+            radius=self.smooth_radius,
+        )
+        y_lines = _find_global_lines(
+            gray,
+            horizontal=True,
+            threshold=self.edge_threshold,
+            coverage_threshold=self.coverage_threshold,
+            radius=self.smooth_radius,
+        )
 
-        while pending:
-            rect = pending.pop()
-            crop = image.crop((rect.left, rect.top, rect.right, rect.bottom))
-            local_vertical = [position - rect.left for position in preferred_vertical if rect.left < position < rect.right]
-            local_horizontal = [position - rect.top for position in preferred_horizontal if rect.top < position < rect.bottom]
-            split = _best_split(
-                crop,
-                self.edge_threshold,
-                self.coverage_threshold,
-                self.smooth_radius,
-                local_vertical,
-                local_horizontal,
-            )
-            if split is None or split.score < 0.34:
-                leaves.append(rect)
-                continue
-
-            if split.orientation == "vertical":
-                first = Rectangle(rect.left, rect.top, rect.left + split.position, rect.bottom)
-                second = Rectangle(rect.left + split.position, rect.top, rect.right, rect.bottom)
-            else:
-                first = Rectangle(rect.left, rect.top, rect.right, rect.top + split.position)
-                second = Rectangle(rect.left, rect.top + split.position, rect.right, rect.bottom)
-
-            if _too_small(first, image, self.min_piece_ratio) or _too_small(second, image, self.min_piece_ratio):
-                leaves.append(rect)
-                continue
-
-            pending.extend((second, first))
-            split_scores.append(split.score)
-
-        if len(leaves) < 2:
+        if not x_lines and not y_lines:
             return [Rectangle(0, 0, original_width, original_height)], 0.0
 
-        rectangles = [
-            Rectangle(
-                round(rect.left * scale_x),
-                round(rect.top * scale_y),
-                round(rect.right * scale_x),
-                round(rect.bottom * scale_y),
+        x_positions = _dedupe_positions([0] + [line.position for line in x_lines] + [gray.width], gray.width)
+        y_positions = _dedupe_positions([0] + [line.position for line in y_lines] + [gray.height], gray.height)
+        columns = len(x_positions) - 1
+        rows = len(y_positions) - 1
+        if columns * rows > 256:
+            return [Rectangle(0, 0, original_width, original_height)], 0.0
+
+        active_vertical = [[False] * max(0, columns - 1) for _ in range(rows)]
+        active_horizontal = [[False] * columns for _ in range(max(0, rows - 1))]
+        seam_scores: list[float] = []
+
+        for row in range(rows):
+            top, bottom = y_positions[row], y_positions[row + 1]
+            for col in range(columns - 1):
+                x = x_positions[col + 1]
+                score = _local_line_score(
+                    gray, x, top, bottom, horizontal=False, threshold=self.edge_threshold
+                )
+                active_vertical[row][col] = score >= 0.42
+                if active_vertical[row][col]:
+                    seam_scores.append(score)
+
+        for row in range(rows - 1):
+            y = y_positions[row + 1]
+            for col in range(columns):
+                left, right = x_positions[col], x_positions[col + 1]
+                score = _local_line_score(
+                    gray, y, left, right, horizontal=True, threshold=self.edge_threshold
+                )
+                active_horizontal[row][col] = score >= 0.42
+                if active_horizontal[row][col]:
+                    seam_scores.append(score)
+
+        components = _grid_components(rows, columns, active_vertical, active_horizontal)
+        rectangles: list[Rectangle] = []
+        for cells in components:
+            min_row = min(row for row, _ in cells)
+            max_row = max(row for row, _ in cells)
+            min_col = min(col for _, col in cells)
+            max_col = max(col for _, col in cells)
+            expected = (max_row - min_row + 1) * (max_col - min_col + 1)
+            if len(cells) != expected:
+                for row, col in cells:
+                    rectangles.append(
+                        Rectangle(x_positions[col], y_positions[row], x_positions[col + 1], y_positions[row + 1])
+                    )
+                continue
+            rectangles.append(
+                Rectangle(
+                    x_positions[min_col],
+                    y_positions[min_row],
+                    x_positions[max_col + 1],
+                    y_positions[max_row + 1],
+                )
             )
-            for rect in leaves
-            if rect.width > 1 and rect.height > 1
+
+        min_width = gray.width * self.min_piece_ratio
+        min_height = gray.height * self.min_piece_ratio
+        rectangles = [
+            rect for rect in rectangles if rect.width >= min_width and rect.height >= min_height
         ]
-        rectangles.sort(key=lambda item: (item.top, item.left))
-        confidence = sum(split_scores) / len(split_scores) if split_scores else 0.0
-        return rectangles, max(0.0, min(1.0, confidence))
+        rectangles.sort(key=lambda rect: (rect.top, rect.left))
+        if len(rectangles) < 2:
+            return [Rectangle(0, 0, original_width, original_height)], 0.0
+
+        scale_x = original_width / gray.width
+        scale_y = original_height / gray.height
+        scaled_rectangles = [
+            Rectangle(
+                round(rect.left * scale_x), round(rect.top * scale_y),
+                round(rect.right * scale_x), round(rect.bottom * scale_y),
+            )
+            for rect in rectangles
+        ]
+        confidence = sum(seam_scores) / len(seam_scores) if seam_scores else 0.0
+        return scaled_rectangles, max(0.0, min(1.0, confidence))
 
 
 def _resize_for_analysis(image: Image.Image, limit: int) -> Image.Image:
@@ -183,25 +208,15 @@ def _resize_for_analysis(image: Image.Image, limit: int) -> Image.Image:
     )
 
 
-def _global_boundaries(image: Image.Image, threshold: float) -> tuple[list[int], list[int]]:
-    """Find straight seam positions that are useful as positional priors.
-
-    These positions are deliberately *not* treated as boundaries by
-    themselves. They only receive a bonus when the same position also has
-    local evidence inside the rectangle being split.
-    """
-    gray = image.convert("L")
-    vertical = _global_axis_candidates(gray, horizontal=False, threshold=threshold)
-    horizontal = _global_axis_candidates(gray, horizontal=True, threshold=threshold)
-    return vertical, horizontal
-
-
-def _global_axis_candidates(
+def _find_global_lines(
     gray: Image.Image,
     *,
     horizontal: bool,
     threshold: float,
-) -> list[int]:
+    coverage_threshold: float,
+    radius: int,
+) -> list[_Line]:
+    """Find long straight seams; these are positional priors, not final cuts."""
     pixels = gray.load()
     width, height = gray.size
     axis_size = height if horizontal else width
@@ -209,184 +224,131 @@ def _global_axis_candidates(
     if axis_size < 32 or perpendicular_size < 32:
         return []
 
-    edge_threshold = max(7.0, threshold * 0.45)
-    scores: list[tuple[float, int]] = []
-    for position in range(2, axis_size - 2):
-        changes: list[float] = []
-        for q in range(perpendicular_size):
-            if horizontal:
-                a = pixels[q, position - 1]
-                b = pixels[q, position]
-            else:
-                a = pixels[position - 1, q]
-                b = pixels[position, q]
-            changes.append(abs(a - b))
-
-        coverage = sum(value >= edge_threshold for value in changes) / len(changes)
-        mean = sum(changes) / len(changes)
-        # Mean * coverage strongly favours long straight seams over local
-        # object edges. A seam may still be visually soft, hence the low
-        # threshold here; local reconstruction makes the final decision.
-        score = mean * coverage
-        if coverage >= 0.35 and mean >= edge_threshold:
-            scores.append((score, position))
-
-    candidates: list[tuple[float, int]] = []
-    for score, position in sorted(scores, reverse=True):
-        if all(abs(position - existing) > max(5, axis_size // 200) for _, existing in candidates):
-            candidates.append((score, position))
-        if len(candidates) >= 12:
-            break
-    return sorted(position for _, position in candidates)
-
-
-def _best_split(
-    image: Image.Image,
-    threshold: float,
-    coverage_threshold: float,
-    radius: int,
-    preferred_vertical: list[int] | None = None,
-    preferred_horizontal: list[int] | None = None,
-) -> _Split | None:
-    width, height = image.size
-    if width < 32 and height < 32:
-        return None
-
-    gray = image.convert("L")
-    candidates = []
-    candidates.extend(
-        _boundary_candidates(
-            gray,
-            horizontal=False,
-            threshold=threshold,
-            coverage_threshold=coverage_threshold,
-            radius=radius,
-        )
-    )
-    candidates.extend(
-        _boundary_candidates(
-            gray,
-            horizontal=True,
-            threshold=threshold,
-            coverage_threshold=coverage_threshold,
-            radius=radius,
-        )
-    )
-
-    preferred_vertical = preferred_vertical or []
-    preferred_horizontal = preferred_horizontal or []
-    if not candidates:
-        return None
-
-    adjusted: list[_Split] = []
-    for candidate in candidates:
-        preferred = preferred_vertical if candidate.orientation == "vertical" else preferred_horizontal
-        if preferred:
-            distance = min(abs(candidate.position - position) for position in preferred)
-            tolerance = max(3, round((width if candidate.orientation == "vertical" else height) * 0.012))
-            if distance <= tolerance:
-                # Positional agreement with a seam detected in the whole
-                # image is strong anti-overfitting evidence. It never creates
-                # a split unless local edge evidence already exists.
-                candidate = _Split(
-                    candidate.orientation,
-                    candidate.position,
-                    min(1.0, candidate.score + 0.18 * (1.0 - distance / tolerance)),
-                )
-        adjusted.append(candidate)
-
-    return max(adjusted, key=lambda item: item.score)
-
-
-def _boundary_candidates(
-    gray: Image.Image,
-    *,
-    horizontal: bool,
-    threshold: float,
-    coverage_threshold: float,
-    radius: int,
-) -> list[_Split]:
-    """Find locally coherent seam candidates inside one rectangle."""
-    pixels = gray.load()
-    width, height = gray.size
-    axis_size = height if horizontal else width
-    perpendicular_size = width if horizontal else height
-    if axis_size < 24 or perpendicular_size < 24:
-        return []
-
-    bin_count = max(6, min(16, perpendicular_size // 32))
+    bin_count = max(8, min(24, perpendicular_size // 32))
     ranges = _ranges(perpendicular_size, bin_count)
     raw: list[float] = []
-    coverage: list[float] = []
+    coverages: list[float] = []
+    local_threshold = max(7.0, threshold * 0.45)
 
     for position in range(1, axis_size):
-        bin_values: list[float] = []
+        values: list[float] = []
         for start, end in ranges:
             if horizontal:
-                changes = [
-                    abs(pixels[x, position] - pixels[x, position - 1])
-                    for x in range(start, end)
-                ]
+                changes = [abs(pixels[x, position] - pixels[x, position - 1]) for x in range(start, end)]
             else:
-                changes = [
-                    abs(pixels[position, y] - pixels[position - 1, y])
-                    for y in range(start, end)
-                ]
-            bin_values.append(sum(changes) / max(1, len(changes)))
-
-        raw.append(_median(bin_values))
-        coverage.append(
-            sum(value >= threshold for value in bin_values) / max(1, len(bin_values))
-        )
+                changes = [abs(pixels[position, y] - pixels[position - 1, y]) for y in range(start, end)]
+            values.append(sum(changes) / max(1, len(changes)))
+        raw.append(_median(values))
+        coverages.append(sum(value >= local_threshold for value in values) / len(values))
 
     smoothed = _smooth(raw, radius)
-    margin = max(6, round(axis_size * 0.05))
-    minimum = max(5.0, threshold * 0.30)
-    candidates: list[_Split] = []
-    neighbourhood = max(3, radius * 3)
-
+    candidates: list[_Line] = []
+    margin = max(8, round(axis_size * 0.035))
     for index in range(1, len(smoothed) - 1):
         position = index + 1
         if position < margin or position > axis_size - margin:
             continue
         value = smoothed[index]
-        if value < minimum:
+        coherent = coverages[index]
+        if value < threshold * 0.30 or coherent < coverage_threshold:
             continue
         if value < smoothed[index - 1] or value < smoothed[index + 1]:
             continue
-
-        start = max(0, index - neighbourhood)
-        end = min(len(smoothed), index + neighbourhood + 1)
-        neighbours = smoothed[start:index] + smoothed[index + 1:end]
+        neighbourhood = smoothed[max(0, index - max(4, radius * 3)):min(len(smoothed), index + max(4, radius * 3) + 1)]
+        neighbours = [v for j, v in enumerate(neighbourhood) if j != len(neighbourhood) // 2]
         baseline = _median(neighbours)
         prominence = value / max(1.0, baseline)
-        coherence = coverage[index]
-        if coherence < coverage_threshold and prominence < 1.8:
-            continue
-
-        strength_score = min(1.0, value / max(threshold, 1.0))
-        coherence_score = min(1.0, coherence / max(coverage_threshold, 0.01))
-        prominence_score = min(1.0, max(0.0, prominence - 1.0) / 2.0)
         score = min(
             1.0,
-            0.40 * strength_score
-            + 0.35 * coherence_score
-            + 0.25 * prominence_score,
+            0.55 * min(1.0, value / max(threshold, 1.0))
+            + 0.30 * min(1.0, coherent / max(coverage_threshold, 0.01))
+            + 0.15 * min(1.0, max(0.0, prominence - 1.0) / 2.0),
         )
-        candidates.append(
-            _Split("horizontal" if horizontal else "vertical", position, score)
-        )
+        candidates.append(_Line(position, score, coherent))
 
-    candidates.sort(key=lambda item: item.position)
-    merged: list[_Split] = []
-    merge_distance = max(2, radius * 2 + 1)
+    candidates.sort(key=lambda line: line.score, reverse=True)
+    selected: list[_Line] = []
+    min_distance = max(6, round(axis_size * 0.018))
     for candidate in candidates:
-        if merged and candidate.position - merged[-1].position <= merge_distance:
-            if candidate.score > merged[-1].score:
-                merged[-1] = candidate
+        if all(abs(candidate.position - other.position) > min_distance for other in selected):
+            selected.append(candidate)
+        if len(selected) >= 12:
+            break
+    if selected:
+        strongest = max(line.score for line in selected)
+        selected = [line for line in selected if line.score >= max(0.55, strongest * 0.70)]
+    return sorted(selected, key=lambda line: line.position)
+
+
+def _local_line_score(
+    gray: Image.Image,
+    position: int,
+    start: int,
+    end: int,
+    *,
+    horizontal: bool,
+    threshold: float,
+) -> float:
+    """Score a global candidate only inside one grid band."""
+    pixels = gray.load()
+    length = end - start
+    if length < 16:
+        return 0.0
+    bins = max(4, min(12, length // 32))
+    ranges = _ranges(length, bins)
+    values: list[float] = []
+    for local_start, local_end in ranges:
+        a, b = start + local_start, start + local_end
+        if horizontal:
+            changes = [abs(pixels[x, position] - pixels[x, position - 1]) for x in range(a, b)]
         else:
-            merged.append(candidate)
-    return merged
+            changes = [abs(pixels[position, y] - pixels[position - 1, y]) for y in range(a, b)]
+        values.append(sum(changes) / max(1, len(changes)))
+    strong = sum(value >= threshold for value in values) / len(values)
+    strength = min(1.0, _median(values) / max(threshold, 1.0))
+    return 0.55 * strong + 0.45 * strength
+
+
+def _grid_components(
+    rows: int,
+    columns: int,
+    vertical: list[list[bool]],
+    horizontal: list[list[bool]],
+) -> list[list[tuple[int, int]]]:
+    visited: set[tuple[int, int]] = set()
+    components: list[list[tuple[int, int]]] = []
+    for start_row in range(rows):
+        for start_col in range(columns):
+            if (start_row, start_col) in visited:
+                continue
+            stack = [(start_row, start_col)]
+            visited.add((start_row, start_col))
+            component: list[tuple[int, int]] = []
+            while stack:
+                row, col = stack.pop()
+                component.append((row, col))
+                if col > 0 and not vertical[row][col - 1] and (row, col - 1) not in visited:
+                    visited.add((row, col - 1)); stack.append((row, col - 1))
+                if col < columns - 1 and not vertical[row][col] and (row, col + 1) not in visited:
+                    visited.add((row, col + 1)); stack.append((row, col + 1))
+                if row > 0 and not horizontal[row - 1][col] and (row - 1, col) not in visited:
+                    visited.add((row - 1, col)); stack.append((row - 1, col))
+                if row < rows - 1 and not horizontal[row][col] and (row + 1, col) not in visited:
+                    visited.add((row + 1, col)); stack.append((row + 1, col))
+            components.append(component)
+    return components
+
+
+def _dedupe_positions(values: list[int], maximum: int) -> list[int]:
+    result: list[int] = []
+    for value in sorted(set(max(0, min(maximum, int(v))) for v in values)):
+        if not result or value - result[-1] >= 4:
+            result.append(value)
+    if not result or result[-1] != maximum:
+        result.append(maximum)
+    if result[0] != 0:
+        result.insert(0, 0)
+    return result
 
 
 def _ranges(length: int, count: int) -> list[tuple[int, int]]:
@@ -419,10 +381,6 @@ def _median(values: list[float]) -> float:
     if len(ordered) % 2:
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / 2.0
-
-
-def _too_small(rect: Rectangle, full: Image.Image, minimum: float) -> bool:
-    return rect.width < full.width * minimum or rect.height < full.height * minimum
 
 
 def _unique_output_path(path: Path) -> Path:
