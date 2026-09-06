@@ -3,11 +3,13 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from ai_sorter.alldup_full_import import ALLDUP_SHA512_CTYPE, AllDupFullImporter
 from ai_sorter.core.database import Database
 from ai_sorter.core.models import FileLocationRecord
+from ai_sorter.modules.scanner import Scanner
 
 
 SHA_A = "a" * 128
@@ -159,6 +161,60 @@ class AllDupFullImportTests(unittest.TestCase):
                 self.assertEqual(owner, SHA_A)
             finally:
                 db.close()
+
+    def test_imported_all_dup_timestamp_allows_scanner_to_skip_rehash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "one.jpg"
+            image.write_bytes(b"stable-content")
+            stat = image.stat()
+            modified = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0)
+            filetime = int((modified.timestamp() + 11644473600) * 10_000_000)
+
+            alldup = root / "checksum.adb"
+            connection = sqlite3.connect(alldup)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE files (id INTEGER PRIMARY KEY, file TEXT NOT NULL);
+                    CREATE TABLE hashc (id INTEGER PRIMARY KEY, fileid INTEGER, fsize INTEGER, ctype INTEGER, checksum BLOB);
+                    CREATE TABLE hasha (id INTEGER PRIMARY KEY, fileid INTEGER, fsize INTEGER, fdate INTEGER, seconds INTEGER, algo INTEGER, checksum BLOB);
+                    """
+                )
+                connection.execute("INSERT INTO files (id, file) VALUES (?, ?)", (1, str(image)))
+                connection.execute(
+                    "INSERT INTO hashc (id, fileid, fsize, ctype, checksum) VALUES (?, ?, ?, ?, ?)",
+                    (1, 1, stat.st_size, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
+                )
+                connection.execute(
+                    "INSERT INTO hasha (id, fileid, fsize, fdate, seconds, algo, checksum) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (1, 1, stat.st_size, filetime, 0, 0, b""),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            project_path = root / "project.db"
+            db = Database(project_path)
+            db.open()
+            db.close()
+            AllDupFullImporter(alldup, project_path).run(apply=True)
+
+            db = Database(project_path)
+            db.open()
+            try:
+                imported = db.connection.execute(
+                    "SELECT modified_at FROM file_location WHERE absolute_path = ?", (str(image),)
+                ).fetchone()[0]
+                self.assertEqual(imported, modified.isoformat(sep=" "))
+            finally:
+                db.close()
+
+            summary = Scanner(db := Database(project_path), worker_count=1).scan(root)
+            db.close()
+            self.assertEqual(summary.skipped, 1)
+            self.assertEqual(summary.scanned, 0)
+            self.assertEqual(summary.failed, 0)
 
 
 if __name__ == "__main__":
