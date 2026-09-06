@@ -10,7 +10,7 @@ import argparse
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -29,6 +29,7 @@ class FullImportStats:
     imported_files: int
     imported_locations: int
     conflicts: int
+    timestamped_rows: int
     elapsed_seconds: float
 
 
@@ -36,7 +37,7 @@ class AllDupFullImporter:
     """Import the canonical SHA-512 + path dataset from AllDup into Scanner DB."""
 
     module_id = "alldup_full_import"
-    module_version = "0.1.0"
+    module_version = "0.2.0"
 
     def __init__(self, alldup_path: Path, project_path: Path, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self.alldup_path = alldup_path.resolve()
@@ -61,19 +62,12 @@ class AllDupFullImporter:
         try:
             source_rows = self._count_source_rows(source, sample_size)
             valid_rows = invalid_rows = processed = 0
-            imported_files = imported_locations = conflicts = 0
-            files_batch: list[tuple[str, int]] = []
-            locations_batch: list[tuple[str, str, int]] = []
+            imported_files = imported_locations = conflicts = timestamped_rows = 0
+            files_batch: list[tuple[str, int, str | None]] = []
+            locations_batch: list[tuple[str, str, int, str | None]] = []
 
-            query = """
-                SELECT f.file AS absolute_path,
-                       h.fsize AS file_size,
-                       h.checksum AS checksum
-                FROM hashc AS h
-                JOIN files AS f ON f.id = h.fileid
-                WHERE h.ctype = ?
-                ORDER BY f.id, f.file, h.id
-            """
+            has_hasha = self._has_table(source, "hasha")
+            query = self._source_query(has_hasha)
             params: list[object] = [ALLDUP_SHA512_CTYPE]
             if sample_size is not None:
                 query += " LIMIT ?"
@@ -84,12 +78,15 @@ class AllDupFullImporter:
                 path = str(row["absolute_path"] or "").strip()
                 size = int(row["file_size"] or 0)
                 sha512 = self._normalize_sha512(row["checksum"])
+                modified_at = self._all_dup_fdate_to_local_iso(row["all_dup_fdate"])
                 if not path or not sha512 or size < 0:
                     invalid_rows += 1
                 else:
                     valid_rows += 1
-                    files_batch.append((sha512, size))
-                    locations_batch.append((sha512, path, size))
+                    if modified_at is not None:
+                        timestamped_rows += 1
+                    files_batch.append((sha512, size, modified_at))
+                    locations_batch.append((sha512, path, size, modified_at))
 
                 if len(locations_batch) >= self.batch_size:
                     if apply:
@@ -127,11 +124,55 @@ class AllDupFullImporter:
                 imported_files=imported_files,
                 imported_locations=imported_locations,
                 conflicts=conflicts,
+                timestamped_rows=timestamped_rows,
                 elapsed_seconds=time.perf_counter() - started,
             )
         finally:
             project.close()
             source.close()
+
+    @staticmethod
+    def _source_query(has_hasha: bool) -> str:
+        fdate = (
+            "(SELECT ha.fdate FROM hasha AS ha "
+            "WHERE ha.fileid = h.fileid AND ha.fsize = h.fsize "
+            "ORDER BY ha.id DESC LIMIT 1)"
+            if has_hasha
+            else "NULL"
+        )
+        return f"""
+            SELECT f.file AS absolute_path,
+                   h.fsize AS file_size,
+                   h.checksum AS checksum,
+                   {fdate} AS all_dup_fdate
+            FROM hashc AS h
+            JOIN files AS f ON f.id = h.fileid
+            WHERE h.ctype = ?
+            ORDER BY f.id, f.file, h.id
+        """
+
+    @staticmethod
+    def _has_table(connection: sqlite3.Connection, name: str) -> bool:
+        row = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,)
+        ).fetchone()
+        return bool(row)
+
+    @staticmethod
+    def _all_dup_fdate_to_local_iso(value: object) -> str | None:
+        if value is None:
+            return None
+        try:
+            filetime = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if filetime <= 0:
+            return None
+        try:
+            utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=filetime / 10.0)
+            return utc.astimezone().replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
+        except (OverflowError, OSError, ValueError):
+            return None
 
     @staticmethod
     def _open_alldup_readonly(path: Path) -> sqlite3.Connection:
@@ -166,8 +207,8 @@ class AllDupFullImporter:
     def _persist_batch(
         self,
         project: sqlite3.Connection,
-        files: list[tuple[str, int]],
-        locations: list[tuple[str, str, int]],
+        files: list[tuple[str, int, str | None]],
+        locations: list[tuple[str, str, int, str | None]],
     ) -> tuple[int, int, int]:
         if not files and not locations:
             return 0, 0, 0
@@ -176,14 +217,15 @@ class AllDupFullImporter:
             """
             INSERT INTO file_record
                 (sha512, size_bytes, width_px, height_px, modified_at, created_at, status)
-            VALUES (?, ?, NULL, NULL, NULL, ?, 'ACTIVE')
+            VALUES (?, ?, NULL, NULL, ?, ?, 'ACTIVE')
             ON CONFLICT(sha512) DO UPDATE SET
                 size_bytes = CASE
                     WHEN file_record.size_bytes IS NULL OR file_record.size_bytes = 0
                     THEN excluded.size_bytes ELSE file_record.size_bytes END,
+                modified_at = COALESCE(excluded.modified_at, file_record.modified_at),
                 status = 'ACTIVE'
             """,
-            [(sha, size, now) for sha, size in files],
+            [(sha, size, modified_at, now) for sha, size, modified_at in files],
         )
 
         project.execute("DROP TABLE IF EXISTS alldup_import_stage")
@@ -193,12 +235,13 @@ class AllDupFullImporter:
                 sha512 TEXT NOT NULL,
                 absolute_path TEXT NOT NULL,
                 file_size INTEGER NOT NULL,
+                modified_at TEXT,
                 PRIMARY KEY (sha512, absolute_path)
             )
             """
         )
         project.executemany(
-            "INSERT OR IGNORE INTO alldup_import_stage (sha512, absolute_path, file_size) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO alldup_import_stage (sha512, absolute_path, file_size, modified_at) VALUES (?, ?, ?, ?)",
             locations,
         )
 
@@ -218,17 +261,17 @@ class AllDupFullImporter:
             """
             UPDATE file_location
             SET file_size = (
-                    SELECT s.file_size
-                    FROM alldup_import_stage s
-                    WHERE s.sha512 = file_location.sha512
-                      AND s.absolute_path = file_location.absolute_path
+                    SELECT s.file_size FROM alldup_import_stage s
+                    WHERE s.sha512 = file_location.sha512 AND s.absolute_path = file_location.absolute_path
                 ),
+                modified_at = COALESCE((
+                    SELECT s.modified_at FROM alldup_import_stage s
+                    WHERE s.sha512 = file_location.sha512 AND s.absolute_path = file_location.absolute_path
+                ), modified_at),
                 location_status = 'ACTIVE'
             WHERE EXISTS (
-                SELECT 1
-                FROM alldup_import_stage s
-                WHERE s.sha512 = file_location.sha512
-                  AND s.absolute_path = file_location.absolute_path
+                SELECT 1 FROM alldup_import_stage s
+                WHERE s.sha512 = file_location.sha512 AND s.absolute_path = file_location.absolute_path
             )
             """
         )
@@ -236,11 +279,10 @@ class AllDupFullImporter:
             """
             INSERT INTO file_location
                 (sha512, absolute_path, file_size, modified_at, location_status, last_seen_execution_id)
-            SELECT s.sha512, s.absolute_path, s.file_size, NULL, 'ACTIVE', NULL
+            SELECT s.sha512, s.absolute_path, s.file_size, s.modified_at, 'ACTIVE', NULL
             FROM alldup_import_stage s
             WHERE NOT EXISTS (
-                SELECT 1
-                FROM file_location fl
+                SELECT 1 FROM file_location fl
                 WHERE fl.absolute_path = s.absolute_path
                   AND fl.location_status = 'ACTIVE'
                   AND fl.sha512 <> s.sha512
@@ -268,7 +310,7 @@ class AllDupFullImporter:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Importuje SHA-512 i ścieżki plików bezpośrednio z bazy AllDup "
+            "Importuje SHA-512, ścieżki i — gdy dostępny — czas modyfikacji z AllDup "
             "do canonicalnych tabel Scanner DB."
         )
     )
@@ -309,6 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Imported file records (batch rows): {stats.imported_files:,}")
     print(f"Imported locations (batch rows): {stats.imported_locations:,}")
     print(f"Path conflicts skipped: {stats.conflicts:,}")
+    print(f"Rows with imported AllDup timestamp: {stats.timestamped_rows:,}")
     print(f"Elapsed: {stats.elapsed_seconds:.3f}s")
     print("Mode: APPLY — Scanner DB was updated." if args.apply else "Mode: DRY-RUN — Scanner DB was not modified.")
     return 0
