@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -43,15 +44,21 @@ class MaintenanceWorker(QObject):
         return connection
 
     def _check_all_locations(self) -> str:
+        """Check active paths and cheap filesystem metadata without reading file content."""
         connection = self._connection()
         total = int(connection.execute(
             "SELECT COUNT(*) AS count FROM file_location WHERE location_status = 'ACTIVE'"
         ).fetchone()["count"])
-        checked = missing = 0
+        checked = missing = inaccessible = size_mismatch = timestamp_mismatch = 0
         cursor = connection.execute(
-            "SELECT absolute_path FROM file_location WHERE location_status = 'ACTIVE' ORDER BY absolute_path"
+            """
+            SELECT absolute_path, file_size, modified_at
+            FROM file_location
+            WHERE location_status = 'ACTIVE'
+            ORDER BY absolute_path
+            """
         )
-        self.progress.emit(0, max(1, total), "Checking file locations…")
+        self.progress.emit(0, max(1, total), "Checking file locations and metadata…")
         while True:
             rows = cursor.fetchmany(BATCH_SIZE)
             if not rows:
@@ -60,16 +67,38 @@ class MaintenanceWorker(QObject):
             for row in rows:
                 path_text = str(row["absolute_path"])
                 try:
-                    exists = os.path.isfile(path_text)
-                except OSError:
-                    exists = False
-                checked += 1
-                if not exists:
+                    stat = os.stat(path_text)
+                except FileNotFoundError:
+                    checked += 1
+                    missing += 1
                     missing_paths.append(path_text)
+                    continue
+                except OSError:
+                    checked += 1
+                    inaccessible += 1
+                    continue
+
+                checked += 1
+                expected_size = row["file_size"]
+                expected_modified = row["modified_at"]
+                if expected_size is not None and int(stat.st_size) != int(expected_size):
+                    size_mismatch += 1
+                if expected_modified is not None:
+                    actual_modified = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0)
+                    if actual_modified != expected_modified:
+                        timestamp_mismatch += 1
+
             if missing_paths:
-                missing += self._mark_missing_batch(missing_paths)
-            self.progress.emit(checked, max(1, total), "Checking file locations…")
-        return f"Checked: {checked:,}\nMarked missing: {missing:,}"
+                self._mark_missing_batch(missing_paths)
+            self.progress.emit(checked, max(1, total), "Checking file locations and metadata…")
+
+        return (
+            f"Checked: {checked:,}\n"
+            f"Marked missing: {missing:,}\n"
+            f"Inaccessible/errors: {inaccessible:,}\n"
+            f"Size mismatches: {size_mismatch:,}\n"
+            f"Timestamp mismatches: {timestamp_mismatch:,}"
+        )
 
     def _mark_missing_batch(self, paths: list[str]) -> int:
         if not paths:
