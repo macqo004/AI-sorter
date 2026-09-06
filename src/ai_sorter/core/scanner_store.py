@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat as stat_module
 from datetime import datetime
 from pathlib import Path
 
@@ -59,12 +60,9 @@ class ScannerStore:
                 ).fetchall()
                 for row in rows:
                     result[row["absolute_path"]] = FileLocationRecord(
-                        sha512=row["sha512"],
-                        absolute_path=row["absolute_path"],
-                        file_size=row["file_size"],
+                        sha512=row["sha512"], absolute_path=row["absolute_path"], file_size=row["file_size"],
                         modified_at=self._parse_datetime(row["modified_at"]),
-                        location_status=row["location_status"],
-                        last_seen_execution_id=row["last_seen_execution_id"],
+                        location_status=row["location_status"], last_seen_execution_id=row["last_seen_execution_id"],
                     )
         except Exception as exc:
             raise DatabaseError("Nie udało się sprawdzić istniejących lokalizacji plików w bazie danych.") from exc
@@ -108,13 +106,10 @@ class ScannerStore:
                         modified_at = excluded.modified_at,
                         status = excluded.status
                     """,
-                    [
-                        (
-                            record.sha512.lower(), record.size_bytes, record.width_px, record.height_px,
-                            self._windows_time(record.modified_at), self._windows_time(record.created_at), record.status,
-                        )
-                        for record in files
-                    ],
+                    [(
+                        record.sha512.lower(), record.size_bytes, record.width_px, record.height_px,
+                        self._windows_time(record.modified_at), self._windows_time(record.created_at), record.status,
+                    ) for record in files],
                 )
                 connection.executemany(
                     """
@@ -122,18 +117,13 @@ class ScannerStore:
                         (sha512, absolute_path, file_size, modified_at, location_status, last_seen_execution_id)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(sha512, absolute_path) DO UPDATE SET
-                        file_size = excluded.file_size,
-                        modified_at = excluded.modified_at,
-                        location_status = excluded.location_status,
-                        last_seen_execution_id = excluded.last_seen_execution_id
+                        file_size = excluded.file_size, modified_at = excluded.modified_at,
+                        location_status = excluded.location_status, last_seen_execution_id = excluded.last_seen_execution_id
                     """,
-                    [
-                        (
-                            record.sha512.lower(), record.absolute_path, record.file_size,
-                            self._windows_time(record.modified_at), record.location_status, execution_id,
-                        )
-                        for record in locations
-                    ],
+                    [(
+                        record.sha512.lower(), record.absolute_path, record.file_size,
+                        self._windows_time(record.modified_at), record.location_status, execution_id,
+                    ) for record in locations],
                 )
                 connection.executemany(
                     "INSERT OR IGNORE INTO scanner_seen_paths (absolute_path) VALUES (?)",
@@ -173,18 +163,13 @@ class ScannerStore:
                     SELECT DISTINCT sha512 FROM file_location
                     WHERE location_status IN ('ACTIVE', 'MISSING')
                       AND (absolute_path = ? OR absolute_path LIKE ?)
-                    """,
-                    (root_text, pattern),
+                    """, (root_text, pattern),
                 )
                 affected = int(connection.execute("SELECT COUNT(*) AS count FROM scanner_clear_shas").fetchone()["count"])
                 if affected == 0:
                     return 0, 0
                 connection.execute(
-                    """
-                    DELETE FROM file_location
-                    WHERE location_status IN ('ACTIVE', 'MISSING')
-                      AND (absolute_path = ? OR absolute_path LIKE ?)
-                    """,
+                    "DELETE FROM file_location WHERE location_status IN ('ACTIVE', 'MISSING') AND (absolute_path = ? OR absolute_path LIKE ?)",
                     (root_text, pattern),
                 )
                 orphan_cursor = connection.execute(
@@ -211,8 +196,8 @@ class ScannerStore:
                 path = Path(str(row["absolute_path"]))
                 checked += 1
                 try:
-                    stat = path.stat()
-                    if not path.is_file():
+                    file_stat = path.stat()
+                    if not stat_module.S_ISREG(file_stat.st_mode):
                         missing_paths.append(str(path))
                         continue
                 except OSError:
@@ -220,8 +205,8 @@ class ScannerStore:
                     continue
                 expected_size = row["file_size"]
                 expected_time = self._parse_datetime(row["modified_at"])
-                actual_time = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0)
-                if expected_size is not None and int(expected_size) != int(stat.st_size):
+                actual_time = datetime.fromtimestamp(file_stat.st_mtime).replace(microsecond=0)
+                if expected_size is not None and int(expected_size) != int(file_stat.st_size):
                     size_mismatch += 1
                 if expected_time is not None and expected_time != actual_time:
                     timestamp_mismatch += 1
@@ -254,9 +239,7 @@ class ScannerStore:
                         f"""
                         DELETE FROM file_location
                         WHERE rowid IN (
-                            SELECT rowid FROM file_location
-                            WHERE location_status = 'MISSING'
-                            LIMIT {self.CLEANUP_BATCH_SIZE}
+                            SELECT rowid FROM file_location WHERE location_status = 'MISSING' LIMIT {self.CLEANUP_BATCH_SIZE}
                         )
                         """
                     )
