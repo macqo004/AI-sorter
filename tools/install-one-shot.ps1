@@ -243,7 +243,8 @@ try {
     & $PythonExe -m pip install --disable-pip-version-check --upgrade pip setuptools
     if ($LASTEXITCODE -ne 0) { throw "pip/setuptools installation failed." }
 
-    & $PythonExe -m pip install --disable-pip-version-check $SourceRoot
+    # Always reinstall the local package so generated entry-point EXEs are refreshed.
+    & $PythonExe -m pip install --disable-pip-version-check --force-reinstall --no-deps $SourceRoot
     if ($LASTEXITCODE -ne 0) { throw "AI-Sorter package installation failed." }
 
     Write-Step "Creating launcher"
