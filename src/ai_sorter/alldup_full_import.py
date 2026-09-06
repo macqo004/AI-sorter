@@ -10,7 +10,7 @@ import argparse
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -37,7 +37,7 @@ class AllDupFullImporter:
     """Import the canonical SHA-512 + path dataset from AllDup into Scanner DB."""
 
     module_id = "alldup_full_import"
-    module_version = "0.2.1"
+    module_version = "0.2.2"
 
     def __init__(self, alldup_path: Path, project_path: Path, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self.alldup_path = alldup_path.resolve()
@@ -264,17 +264,18 @@ class AllDupFullImporter:
 
     @staticmethod
     def _all_dup_fdate_to_local_iso(value: object) -> str | None:
+        """Convert AllDup's fdate (OLE Automation-style local date) to Scanner time."""
         if value is None:
             return None
         try:
-            filetime = int(value)
+            serial_days = float(value)
         except (TypeError, ValueError, OverflowError):
             return None
-        if filetime <= 0:
+        if serial_days <= 0:
             return None
         try:
-            utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=filetime / 10.0)
-            return utc.astimezone().replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
+            local_dt = datetime(1899, 12, 30) + timedelta(days=serial_days)
+            return local_dt.replace(microsecond=0).isoformat(sep=" ")
         except (OverflowError, OSError, ValueError):
             return None
 
