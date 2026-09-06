@@ -54,7 +54,9 @@ class MaintenanceWorker(QObject):
         )
 
     def _cleanup_inactive(self) -> str:
+        self.progress.emit(0, 1, "Cleaning inactive Scanner data…")
         removed_locations, removed_records = self._store().cleanup_inactive()
+        self.progress.emit(1, 1, "Inactive Scanner data cleanup complete.")
         return (
             f"Removed missing locations: {removed_locations:,}\n"
             f"Removed orphan ACTIVE file records: {removed_records:,}"
