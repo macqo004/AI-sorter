@@ -31,6 +31,7 @@ class AllDupFullImportTests(unittest.TestCase):
                     id INTEGER PRIMARY KEY,
                     fileid INTEGER NOT NULL,
                     fsize INTEGER NOT NULL,
+                    fdate INTEGER,
                     ctype INTEGER NOT NULL,
                     checksum BLOB
                 );
@@ -45,14 +46,14 @@ class AllDupFullImportTests(unittest.TestCase):
                 rows.append((4, conflict_path))
             connection.executemany("INSERT INTO files (id, file) VALUES (?, ?)", rows)
             hashes = [
-                (1, 1, 100, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
-                (2, 2, 100, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
-                (3, 3, 200, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_B)),
+                (1, 1, 100, None, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
+                (2, 2, 100, None, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
+                (3, 3, 200, None, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_B)),
             ]
             if conflict_path:
-                hashes.append((4, 4, 300, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_C)))
+                hashes.append((4, 4, 300, None, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_C)))
             connection.executemany(
-                "INSERT INTO hashc (id, fileid, fsize, ctype, checksum) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO hashc (id, fileid, fsize, fdate, ctype, checksum) VALUES (?, ?, ?, ?, ?, ?)",
                 hashes,
             )
             connection.commit()
@@ -162,7 +163,7 @@ class AllDupFullImportTests(unittest.TestCase):
             finally:
                 db.close()
 
-    def test_imported_all_dup_timestamp_allows_scanner_to_skip_rehash(self) -> None:
+    def test_imported_hashc_timestamp_allows_scanner_to_skip_rehash(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             image = root / "one.jpg"
@@ -177,18 +178,20 @@ class AllDupFullImportTests(unittest.TestCase):
                 connection.executescript(
                     """
                     CREATE TABLE files (id INTEGER PRIMARY KEY, file TEXT NOT NULL);
-                    CREATE TABLE hashc (id INTEGER PRIMARY KEY, fileid INTEGER, fsize INTEGER, ctype INTEGER, checksum BLOB);
-                    CREATE TABLE hasha (id INTEGER PRIMARY KEY, fileid INTEGER, fsize INTEGER, fdate INTEGER, seconds INTEGER, algo INTEGER, checksum BLOB);
+                    CREATE TABLE hashc (
+                        id INTEGER PRIMARY KEY,
+                        fileid INTEGER,
+                        fsize INTEGER,
+                        fdate INTEGER,
+                        ctype INTEGER,
+                        checksum BLOB
+                    );
                     """
                 )
                 connection.execute("INSERT INTO files (id, file) VALUES (?, ?)", (1, str(image)))
                 connection.execute(
-                    "INSERT INTO hashc (id, fileid, fsize, ctype, checksum) VALUES (?, ?, ?, ?, ?)",
-                    (1, 1, stat.st_size, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
-                )
-                connection.execute(
-                    "INSERT INTO hasha (id, fileid, fsize, fdate, seconds, algo, checksum) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (1, 1, stat.st_size, filetime, 0, 0, b""),
+                    "INSERT INTO hashc (id, fileid, fsize, fdate, ctype, checksum) VALUES (?, ?, ?, ?, ?, ?)",
+                    (1, 1, stat.st_size, filetime, ALLDUP_SHA512_CTYPE, bytes.fromhex(SHA_A)),
                 )
                 connection.commit()
             finally:
@@ -198,20 +201,23 @@ class AllDupFullImportTests(unittest.TestCase):
             db = Database(project_path)
             db.open()
             db.close()
-            AllDupFullImporter(alldup, project_path).run(apply=True)
+            stats = AllDupFullImporter(alldup, project_path).run(apply=True)
+            self.assertEqual(stats.timestamped_rows, 1)
+
+            db = Database(project_path)
+            db.open()
+            imported = db.connection.execute(
+                "SELECT modified_at FROM file_location WHERE absolute_path = ?", (str(image),)
+            ).fetchone()[0]
+            db.close()
+            self.assertEqual(imported, modified.isoformat(sep=" "))
 
             db = Database(project_path)
             db.open()
             try:
-                imported = db.connection.execute(
-                    "SELECT modified_at FROM file_location WHERE absolute_path = ?", (str(image),)
-                ).fetchone()[0]
-                self.assertEqual(imported, modified.isoformat(sep=" "))
+                summary = Scanner(db, worker_count=1).scan(root)
             finally:
                 db.close()
-
-            summary = Scanner(db := Database(project_path), worker_count=1).scan(root)
-            db.close()
             self.assertEqual(summary.skipped, 1)
             self.assertEqual(summary.scanned, 0)
             self.assertEqual(summary.failed, 0)
