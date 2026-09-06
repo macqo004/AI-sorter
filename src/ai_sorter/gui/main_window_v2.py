@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self.maintenance_started_at: float | None = None
         self._last_scan_progress: ScanProgress | None = None
         self._last_color_progress: ColorProgress | None = None
+        self._last_maintenance_progress: tuple[int, int, str] | None = None
         self._scan_total = 0
         self._color_total = 0
         self.elapsed_timer = QTimer(self)
@@ -68,7 +69,6 @@ class MainWindow(QMainWindow):
         self.schema_label = QLabel(central)
         self.files_label = QLabel(central)
         self.locations_label = QLabel(central)
-        self.modules_label = QLabel(central)
         self.executions_label = QLabel(central)
         form.addRow("Project", QLabel(str(project_path), central))
         form.addRow("Database", QLabel(database_status.path, central))
@@ -76,7 +76,6 @@ class MainWindow(QMainWindow):
         form.addRow("Schema", self.schema_label)
         form.addRow("Files", self.files_label)
         form.addRow("Locations", self.locations_label)
-        form.addRow("Modules", self.modules_label)
         form.addRow("Executions", self.executions_label)
         form.addRow("Compute backend", QLabel(compute_backend.display_name, central))
         layout.addLayout(form)
@@ -131,7 +130,6 @@ class MainWindow(QMainWindow):
         self.schema_label.setText(str(status.schema_version))
         self.files_label.setText(str(status.file_count))
         self.locations_label.setText(str(status.location_count))
-        self.modules_label.setText(str(status.module_count))
         self.executions_label.setText(str(status.execution_count))
 
     def _refresh_database_status(self) -> None:
@@ -222,9 +220,11 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(False)
         self.maintenance_started_at = time.perf_counter()
+        self._last_maintenance_progress = (0, 1, label)
         self._set_progress(0, 1, label)
         self.progress.setFormat("Preparing…")
         self.scan_details.setText(f"{label}\nElapsed: 00:00:00")
+        self.elapsed_timer.start()
         self.maintenance_thread = QThread(self)
         self.maintenance_worker = MaintenanceWorker(self.database, operation)
         self.maintenance_worker.moveToThread(self.maintenance_thread)
@@ -238,13 +238,19 @@ class MainWindow(QMainWindow):
         self.maintenance_thread.start()
 
     def on_maintenance_progress(self, current: int, total: int, message: str) -> None:
+        self._last_maintenance_progress = (current, total, message)
+        self._render_maintenance_progress(current, total, message)
+
+    def _render_maintenance_progress(self, current: int, total: int, message: str) -> None:
         self._set_progress(current, total, message)
         elapsed = time.perf_counter() - self.maintenance_started_at if self.maintenance_started_at else 0.0
         self.scan_details.setText(f"{message}\nElapsed: {self._format_duration(elapsed)}")
 
     def on_maintenance_finished(self, result: object) -> None:
         elapsed = time.perf_counter() - self.maintenance_started_at if self.maintenance_started_at else 0.0
+        self.elapsed_timer.stop()
         self.maintenance_started_at = None
+        self._last_maintenance_progress = None
         self._refresh_database_status()
         self._set_module_controls_enabled(True)
         self._set_idle_progress()
@@ -253,7 +259,9 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Maintenance", f"Operacja zakończona.\n\n{result}")
 
     def on_maintenance_failed(self, message: str) -> None:
+        self.elapsed_timer.stop()
         self.maintenance_started_at = None
+        self._last_maintenance_progress = None
         self._refresh_database_status()
         self._set_module_controls_enabled(True)
         self._set_idle_progress()
@@ -318,6 +326,14 @@ class MainWindow(QMainWindow):
             self.color_cancel_button.setEnabled(False)
             self.statusBar().showMessage("Cancelling Color Analysis…")
 
+    def _refresh_live_elapsed(self) -> None:
+        if self.maintenance_started_at and self._last_maintenance_progress:
+            self._render_maintenance_progress(*self._last_maintenance_progress)
+        elif self.scan_started_at and self._last_scan_progress:
+            self._render_scan_progress(self._last_scan_progress)
+        elif self.color_started_at and self._last_color_progress:
+            self._render_color_progress(self._last_color_progress)
+
     def on_scan_progress(self, progress: ScanProgress) -> None:
         self._last_scan_progress = progress
         current = min(progress.processed, self._scan_total)
@@ -340,12 +356,38 @@ class MainWindow(QMainWindow):
         self._last_color_progress = progress
         current = min(progress.processed, self._color_total)
         self._set_progress(current, self._color_total, "Color Analysis")
+        self._render_color_progress(progress)
+
+    def _render_color_progress(self, progress: ColorProgress) -> None:
         elapsed = time.perf_counter() - self.color_started_at if self.color_started_at else 0.0
         rate = progress.processed / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
             f"Color Analysis\nConsidered: {progress.considered:,}\nProcessed: {progress.processed:,}\n"
             f"Errors: {progress.failed:,}\nRate: {rate:.1f} files/s\nElapsed: {self._format_duration(elapsed)}\n"
             f"Current: {progress.current_path or '—'}"
+        )
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total_seconds = max(0, int(seconds))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _format_scan_summary(self, summary: ScanSummary, title: str) -> str:
+        scanned_rate = summary.scanned / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        skipped_rate = summary.skipped / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        processed_rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        return (
+            f"{title}\n\nDiscovered: {summary.discovered}\nProcessed: {summary.processed}\n"
+            f"Scanned: {summary.scanned}\nSaved: {summary.saved}\nSkipped: {summary.skipped}\n"
+            f"Errors: {summary.failed}\nMissing: {summary.missing}\n\n"
+            f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
+            f"Discovery: {self._format_duration(summary.discovery_seconds)}\n"
+            f"Hashing (worker time): {self._format_duration(summary.hash_seconds)}\n"
+            f"Database: {self._format_duration(summary.database_seconds)}\n\n"
+            f"Scanned rate: {scanned_rate:.1f} files/s\nSkipped rate: {skipped_rate:.1f} files/s\n"
+            f"Processed rate: {processed_rate:.1f} files/s"
         )
 
     def on_scan_finished(self, summary: ScanSummary) -> None:
@@ -356,9 +398,8 @@ class MainWindow(QMainWindow):
         self.color_cancel_button.setEnabled(False)
         self._set_progress(summary.processed, max(self._scan_total, summary.processed, 1), "Scanner")
         self.scan_started_at = None
-        title = "Scanner finished." if not summary.cancelled else "Scanner cancelled safely."
-        self.statusBar().showMessage(title)
-        self.scan_details.setText(self._format_scan_summary(summary, title))
+        self._last_scan_progress = None
+        self.scan_details.setText(self._format_scan_summary(summary, "Scanner finished." if not summary.cancelled else "Scanner cancelled safely."))
 
     def on_scan_failed(self, message: str) -> None:
         self.elapsed_timer.stop()
@@ -366,8 +407,9 @@ class MainWindow(QMainWindow):
         self._set_module_controls_enabled(True)
         self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(False)
+        self._set_idle_progress()
         self.scan_started_at = None
-        self.progress.setFormat("ERROR")
+        self._last_scan_progress = None
         self.scan_details.setText(f"Scanner could not finish. Reason: {message}")
 
     def on_color_finished(self, summary: ColorSummary) -> None:
@@ -378,38 +420,31 @@ class MainWindow(QMainWindow):
         self.color_cancel_button.setEnabled(False)
         self._set_progress(summary.processed, max(self._color_total, summary.processed, 1), "Color Analysis")
         self.color_started_at = None
-        title = "Color Analysis finished." if not summary.cancelled else "Color Analysis cancelled safely."
-        self.statusBar().showMessage(title)
-        self.scan_details.setText(self._format_color_summary(summary, title))
+        self._last_color_progress = None
+        self.scan_details.setText(
+            f"Color Analysis finished.\n\nConsidered: {summary.considered}\nProcessed: {summary.processed}\n"
+            f"Skipped: {summary.skipped}\nErrors: {summary.failed}\n\n"
+            f"Total time: {self._format_duration(summary.elapsed_seconds)}"
+        )
 
     def on_color_failed(self, message: str) -> None:
         self.elapsed_timer.stop()
-        self._refresh_database_status()
         self._set_module_controls_enabled(True)
-        self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(False)
         self.color_started_at = None
-        self.progress.setFormat("ERROR")
+        self._last_color_progress = None
+        self._set_idle_progress()
         self.scan_details.setText(f"Color Analysis could not finish. Reason: {message}")
 
     def _count_supported_files(self, root: Path) -> int:
-        total = 0
-        stack = [root.resolve()]
-        while stack:
-            current = stack.pop()
-            try:
-                with os.scandir(current) as entries:
-                    for entry in entries:
-                        try:
-                            if entry.is_dir(follow_symlinks=False):
-                                stack.append(Path(entry.path))
-                            elif entry.is_file(follow_symlinks=False) and Path(entry.name).suffix.lower() in SUPPORTED_EXTENSIONS:
-                                total += 1
-                        except OSError:
-                            continue
-            except OSError:
-                continue
-        return total
+        count = 0
+        try:
+            for current, directories, files in os.walk(root):
+                directories[:] = sorted(directories, key=str.casefold)
+                count += sum(1 for name in files if Path(name).suffix.lower() in SUPPORTED_EXTENSIONS)
+        except OSError:
+            return count
+        return count
 
     def _count_color_targets(self, root: Path) -> int:
         connection = self.database.connection
@@ -420,58 +455,28 @@ class MainWindow(QMainWindow):
         row = connection.execute(
             """
             SELECT COUNT(*) AS count
-            FROM (
-                SELECT f.sha512
-                FROM file_record AS f
-                JOIN file_location AS fl
-                  ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
-                WHERE f.status = 'ACTIVE'
-                  AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM analysis_result AS ar
-                      WHERE ar.sha512 = f.sha512
-                        AND ar.module_id = 'color_analysis'
-                        AND ar.result_key = 'color_analysis'
-                  )
-                GROUP BY f.sha512
-            )
+            FROM file_record AS f
+            JOIN file_location AS fl ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+            WHERE f.status = 'ACTIVE'
+              AND NOT EXISTS (
+                    SELECT 1 FROM analysis_result AS ar
+                    WHERE ar.sha512 = f.sha512
+                      AND ar.module_id = 'color_analysis'
+                      AND ar.result_key = 'color_analysis'
+              )
+              AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)
             """,
             (root_text, pattern),
         ).fetchone()
-        return int(row["count"] if row else 0)
+        return int(row["count"]) if row else 0
 
-    def _format_scan_summary(self, summary: ScanSummary, title: str) -> str:
-        rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
-        return (
-            f"{title}\n\nDiscovered: {summary.discovered:,}\nProcessed: {summary.processed:,}\n"
-            f"Scanned: {summary.scanned:,}\nSaved: {summary.saved:,}\nSkipped: {summary.skipped:,}\n"
-            f"Errors: {summary.failed:,}\nMissing: {summary.missing:,}\n\n"
-            f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
-            f"Processed rate: {rate:.1f} files/s"
-        )
-
-    def _format_color_summary(self, summary: ColorSummary, title: str) -> str:
-        rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
-        return (
-            f"{title}\n\nConsidered: {summary.considered:,}\nProcessed: {summary.processed:,}\n"
-            f"Skipped: {summary.skipped:,}\nErrors: {summary.failed:,}\n\n"
-            f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
-            f"Processed rate: {rate:.1f} files/s"
-        )
-
-    @staticmethod
-    def _format_duration(seconds: float) -> str:
-        total_seconds = max(0, int(seconds))
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, secs = divmod(remainder, 60)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-    def _refresh_live_elapsed(self) -> None:
-        if self.scan_started_at and self._last_scan_progress:
-            self._render_scan_progress(self._last_scan_progress)
-        elif self.color_started_at and self._last_color_progress:
-            self.on_color_progress(self._last_color_progress)
+    def _cleanup_maintenance_thread(self) -> None:
+        if self.maintenance_thread:
+            self.maintenance_thread.deleteLater()
+        if self.maintenance_worker:
+            self.maintenance_worker.deleteLater()
+        self.maintenance_thread = None
+        self.maintenance_worker = None
 
     def _cleanup_scanner_thread(self) -> None:
         if self.scanner_thread:
@@ -488,11 +493,3 @@ class MainWindow(QMainWindow):
             self.color_worker.deleteLater()
         self.color_thread = None
         self.color_worker = None
-
-    def _cleanup_maintenance_thread(self) -> None:
-        if self.maintenance_thread:
-            self.maintenance_thread.deleteLater()
-        if self.maintenance_worker:
-            self.maintenance_worker.deleteLater()
-        self.maintenance_thread = None
-        self.maintenance_worker = None
