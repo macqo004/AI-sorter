@@ -110,13 +110,8 @@ class ScannerStore:
                     """,
                     [
                         (
-                            record.sha512.lower(),
-                            record.size_bytes,
-                            record.width_px,
-                            record.height_px,
-                            self._windows_time(record.modified_at),
-                            self._windows_time(record.created_at),
-                            record.status,
+                            record.sha512.lower(), record.size_bytes, record.width_px, record.height_px,
+                            self._windows_time(record.modified_at), self._windows_time(record.created_at), record.status,
                         )
                         for record in files
                     ],
@@ -134,12 +129,8 @@ class ScannerStore:
                     """,
                     [
                         (
-                            record.sha512.lower(),
-                            record.absolute_path,
-                            record.file_size,
-                            self._windows_time(record.modified_at),
-                            record.location_status,
-                            execution_id,
+                            record.sha512.lower(), record.absolute_path, record.file_size,
+                            self._windows_time(record.modified_at), record.location_status, execution_id,
                         )
                         for record in locations
                     ],
@@ -208,26 +199,38 @@ class ScannerStore:
         except Exception as exc:
             raise DatabaseError("Nie udało się wyczyścić wyników Scanner dla wybranego folderu. Pliki kolekcji nie zostały zmienione.") from exc
 
-    def check_all_locations(self) -> tuple[int, int]:
-        checked = missing = 0
+    def check_all_locations(self) -> tuple[int, int, int, int]:
+        """Check existence plus inexpensive size/mtime freshness for ACTIVE locations."""
+        checked = missing = size_mismatch = timestamp_mismatch = 0
         try:
-            cursor = self.connection.execute("SELECT absolute_path FROM file_location WHERE location_status = 'ACTIVE'")
+            cursor = self.connection.execute(
+                "SELECT absolute_path, file_size, modified_at FROM file_location WHERE location_status = 'ACTIVE'"
+            )
             missing_paths: list[str] = []
             for row in cursor:
                 path = Path(str(row["absolute_path"]))
                 checked += 1
                 try:
-                    exists = path.is_file()
+                    stat = path.stat()
+                    if not path.is_file():
+                        missing_paths.append(str(path))
+                        continue
                 except OSError:
-                    exists = False
-                if not exists:
                     missing_paths.append(str(path))
-                    if len(missing_paths) >= self.CLEANUP_BATCH_SIZE:
-                        missing += self._mark_missing_batch(missing_paths)
-                        missing_paths.clear()
+                    continue
+                expected_size = row["file_size"]
+                expected_time = self._parse_datetime(row["modified_at"])
+                actual_time = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0)
+                if expected_size is not None and int(expected_size) != int(stat.st_size):
+                    size_mismatch += 1
+                if expected_time is not None and expected_time != actual_time:
+                    timestamp_mismatch += 1
+                if len(missing_paths) >= self.CLEANUP_BATCH_SIZE:
+                    missing += self._mark_missing_batch(missing_paths)
+                    missing_paths.clear()
             if missing_paths:
                 missing += self._mark_missing_batch(missing_paths)
-            return checked, missing
+            return checked, missing, size_mismatch, timestamp_mismatch
         except Exception as exc:
             raise DatabaseError("Nie udało się sprawdzić aktualności lokalizacji plików.") from exc
 
@@ -285,7 +288,6 @@ class ScannerStore:
 
     @staticmethod
     def _windows_time(value: datetime | None) -> str | None:
-        """Store the local Windows-style timestamp displayed in file Properties to whole seconds."""
         return value.replace(microsecond=0, tzinfo=None).isoformat(sep=" ") if value is not None else None
 
     @staticmethod
