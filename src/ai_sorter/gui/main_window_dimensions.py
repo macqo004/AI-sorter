@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
+from PySide6.QtWidgets import QFileDialog, QFormLayout, QMessageBox, QPushButton
 
 from ..alldup_full_import import AllDupFullImporter, FullImportStats
 from ..modules.image_dimensions import DimensionProgress, DimensionSummary, ImageDimensions
@@ -27,6 +27,10 @@ class MainWindow(BaseMainWindow):
         self.import_worker: AllDupFullImportWorker | None = None
         self.import_started_at: float | None = None
         super().__init__(project_path, database, database_status, compute_backend)
+
+        form = self.findChild(QFormLayout)
+        if form is not None and getattr(self, "modules_label", None) is not None:
+            form.removeRow(self.modules_label)
 
         layout = self.centralWidget().layout()
         if layout is None:
