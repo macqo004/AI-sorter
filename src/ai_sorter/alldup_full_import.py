@@ -37,7 +37,7 @@ class AllDupFullImporter:
     """Import the canonical SHA-512 + path dataset from AllDup into Scanner DB."""
 
     module_id = "alldup_full_import"
-    module_version = "0.2.0"
+    module_version = "0.2.1"
 
     def __init__(self, alldup_path: Path, project_path: Path, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self.alldup_path = alldup_path.resolve()
@@ -66,8 +66,7 @@ class AllDupFullImporter:
             files_batch: list[tuple[str, int, str | None]] = []
             locations_batch: list[tuple[str, str, int, str | None]] = []
 
-            has_hasha = self._has_table(source, "hasha")
-            query = self._source_query(has_hasha)
+            query = self._source_query()
             params: list[object] = [ALLDUP_SHA512_CTYPE]
             if sample_size is not None:
                 query += " LIMIT ?"
@@ -132,47 +131,17 @@ class AllDupFullImporter:
             source.close()
 
     @staticmethod
-    def _source_query(has_hasha: bool) -> str:
-        fdate = (
-            "(SELECT ha.fdate FROM hasha AS ha "
-            "WHERE ha.fileid = h.fileid AND ha.fsize = h.fsize "
-            "ORDER BY ha.id DESC LIMIT 1)"
-            if has_hasha
-            else "NULL"
-        )
-        return f"""
+    def _source_query() -> str:
+        return """
             SELECT f.file AS absolute_path,
                    h.fsize AS file_size,
                    h.checksum AS checksum,
-                   {fdate} AS all_dup_fdate
+                   h.fdate AS all_dup_fdate
             FROM hashc AS h
             JOIN files AS f ON f.id = h.fileid
             WHERE h.ctype = ?
             ORDER BY f.id, f.file, h.id
         """
-
-    @staticmethod
-    def _has_table(connection: sqlite3.Connection, name: str) -> bool:
-        row = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,)
-        ).fetchone()
-        return bool(row)
-
-    @staticmethod
-    def _all_dup_fdate_to_local_iso(value: object) -> str | None:
-        if value is None:
-            return None
-        try:
-            filetime = int(value)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        if filetime <= 0:
-            return None
-        try:
-            utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=filetime / 10.0)
-            return utc.astimezone().replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
-        except (OverflowError, OSError, ValueError):
-            return None
 
     @staticmethod
     def _open_alldup_readonly(path: Path) -> sqlite3.Connection:
@@ -294,6 +263,22 @@ class AllDupFullImporter:
         return len(files), max(0, stage_count - conflicts), conflicts
 
     @staticmethod
+    def _all_dup_fdate_to_local_iso(value: object) -> str | None:
+        if value is None:
+            return None
+        try:
+            filetime = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if filetime <= 0:
+            return None
+        try:
+            utc = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=filetime / 10.0)
+            return utc.astimezone().replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    @staticmethod
     def _normalize_sha512(value: object) -> str:
         if value is None:
             return ""
@@ -310,7 +295,7 @@ class AllDupFullImporter:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Importuje SHA-512, ścieżki i — gdy dostępny — czas modyfikacji z AllDup "
+            "Importuje SHA-512, ścieżki i czas modyfikacji z AllDup "
             "do canonicalnych tabel Scanner DB."
         )
     )
