@@ -37,7 +37,7 @@ class AllDupFullImporter:
     """Import the canonical SHA-512 + path dataset from AllDup into Scanner DB."""
 
     module_id = "alldup_full_import"
-    module_version = "0.2.2"
+    module_version = "0.2.3"
 
     def __init__(self, alldup_path: Path, project_path: Path, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
         self.alldup_path = alldup_path.resolve()
@@ -251,6 +251,11 @@ class AllDupFullImporter:
             SELECT s.sha512, s.absolute_path, s.file_size, s.modified_at, 'ACTIVE', NULL
             FROM alldup_import_stage s
             WHERE NOT EXISTS (
+                SELECT 1 FROM file_location fl
+                WHERE fl.sha512 = s.sha512
+                  AND fl.absolute_path = s.absolute_path
+            )
+              AND NOT EXISTS (
                 SELECT 1 FROM file_location fl
                 WHERE fl.absolute_path = s.absolute_path
                   AND fl.location_status = 'ACTIVE'
