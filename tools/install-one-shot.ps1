@@ -282,7 +282,9 @@ Last-path state: $InstallerStatePath
     Write-Host "You can also paste a different path next time."
     Write-Host "`nThis bootstrap requires Internet access during installation."
 
-    Start-Process -FilePath $LauncherPath
+    # Do not auto-start the application from the updater. This keeps the updater
+    # independent from the application process and avoids startup errors being
+    # mistaken for installation failures.
 }
 catch {
     $Message = $_.Exception.Message
