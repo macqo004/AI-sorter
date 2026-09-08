@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
@@ -36,6 +37,92 @@ class MainWindow(BaseMainWindow):
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "simimages_button"):
             self.simimages_button.setEnabled(enabled)
+
+    def _count_supported_files(self, root: Path) -> int:
+        count = 0
+        try:
+            for current, directories, files in os.walk(root):
+                directories[:] = sorted(directories, key=str.casefold)
+                count += sum(1 for name in files if Path(name).suffix.lower() in self._scanner_supported_extensions())
+        except OSError:
+            return count
+        return count
+
+    @staticmethod
+    def _scanner_supported_extensions() -> frozenset[str]:
+        return frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
+
+    def _count_color_targets(self, root: Path) -> int:
+        connection = self.database.connection
+        if connection is None:
+            return 0
+        root_text = str(root.resolve()).rstrip("\\/")
+        pattern = root_text + "\\%"
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM file_record AS f
+            JOIN file_location AS fl ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+            WHERE f.status = 'ACTIVE'
+              AND NOT EXISTS (
+                    SELECT 1 FROM analysis_result AS ar
+                    WHERE ar.sha512 = f.sha512
+                      AND ar.module_id = 'color_analysis'
+                      AND ar.result_key = 'color_analysis'
+              )
+              AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)
+            """,
+            (root_text, pattern),
+        ).fetchone()
+        return int(row["count"]) if row else 0
+
+    def on_color_finished(self, summary) -> None:
+        self.elapsed_timer.stop()
+        self._refresh_database_status()
+        self._set_module_controls_enabled(True)
+        self.cancel_button.setEnabled(False)
+        self.color_cancel_button.setEnabled(False)
+        self._set_progress(summary.processed, max(getattr(self, "_color_total", 0), summary.processed, 1), "Color Analysis")
+        self.color_started_at = None
+        self._last_color_progress = None
+        self.scan_details.setText(
+            f"Color Analysis finished.\n\nConsidered: {summary.considered}\nProcessed: {summary.processed}\n"
+            f"Skipped: {summary.skipped}\nErrors: {summary.failed}\n\n"
+            f"Total time: {self._format_duration(summary.elapsed_seconds)}"
+        )
+
+    def on_color_failed(self, message: str) -> None:
+        self.elapsed_timer.stop()
+        self._set_module_controls_enabled(True)
+        self.color_cancel_button.setEnabled(False)
+        self.color_started_at = None
+        self._last_color_progress = None
+        self._set_idle_progress()
+        self.scan_details.setText(f"Color Analysis could not finish. Reason: {message}")
+
+    def _cleanup_maintenance_thread(self) -> None:
+        if self.maintenance_thread:
+            self.maintenance_thread.deleteLater()
+        if self.maintenance_worker:
+            self.maintenance_worker.deleteLater()
+        self.maintenance_thread = None
+        self.maintenance_worker = None
+
+    def _cleanup_scanner_thread(self) -> None:
+        if self.scanner_thread:
+            self.scanner_thread.deleteLater()
+        if self.scanner_worker:
+            self.scanner_worker.deleteLater()
+        self.scanner_thread = None
+        self.scanner_worker = None
+
+    def _cleanup_color_thread(self) -> None:
+        if self.color_thread:
+            self.color_thread.deleteLater()
+        if self.color_worker:
+            self.color_worker.deleteLater()
+        self.color_thread = None
+        self.color_worker = None
 
     def inspect_simimages_database(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
