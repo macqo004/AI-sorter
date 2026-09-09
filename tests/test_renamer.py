@@ -39,7 +39,7 @@ def test_rules_are_applied_sequentially() -> None:
     assert name == "Furina.jpg"
 
 
-def test_engine_rejects_existing_destination(tmp_path: Path) -> None:
+def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
     source = tmp_path / " sample.txt"
     destination = tmp_path / "sample.txt"
     source.write_text("x", encoding="utf-8")
@@ -48,23 +48,31 @@ def test_engine_rejects_existing_destination(tmp_path: Path) -> None:
     engine = RenamerEngine()
     proposals = engine.plan([source])
     assert len(proposals) == 1
+    assert proposals[0].destination == tmp_path / "sample__dup-1.txt"
+    assert "auto-conflict-resolution" in proposals[0].reason
 
-    with pytest.raises(FileExistsError):
-        engine.execute(proposals)
+    engine.execute(proposals)
 
-    assert source.exists()
+    assert not source.exists()
     assert destination.read_text(encoding="utf-8") == "existing"
+    assert (tmp_path / "sample__dup-1.txt").read_text(encoding="utf-8") == "x"
 
 
-def test_engine_reports_proposal_collision_without_attribute_error(tmp_path: Path) -> None:
+def test_engine_auto_resolves_proposal_collision(tmp_path: Path) -> None:
     first = tmp_path / " sample.txt"
     second = tmp_path / "_sample.txt"
     first.write_text("first", encoding="utf-8")
     second.write_text("second", encoding="utf-8")
 
     engine = RenamerEngine()
-    with pytest.raises(FileExistsError, match="sample.txt"):
-        engine.plan([first, second])
+    proposals = engine.plan([first, second])
 
-    assert first.exists()
-    assert second.exists()
+    assert [proposal.destination.name for proposal in proposals] == [
+        "sample.txt",
+        "sample__dup-1.txt",
+    ]
+
+    engine.execute(proposals)
+
+    assert (tmp_path / "sample.txt").read_text(encoding="utf-8") == "first"
+    assert (tmp_path / "sample__dup-1.txt").read_text(encoding="utf-8") == "second"
