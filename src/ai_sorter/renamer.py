@@ -9,6 +9,8 @@ from typing import Iterable, Protocol
 
 
 DUPLICATE_SUFFIX_RE = re.compile(r"(?:\s*\(\d+\)|\s*\[\d+\]|\s*\{\d+\})$")
+MAX_FILENAME_LENGTH = 255
+AUTO_CONFLICT_SUFFIX = "__dup-"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,12 +109,63 @@ class RenamerEngine:
             proposal = self.propose(source)
             if proposal is not None and proposal.changed:
                 proposals.append(proposal)
-        self._validate_plan(proposals)
-        return proposals
+        return self._resolve_conflicts(proposals)
 
     @staticmethod
     def _path_key(path: Path) -> str:
         return os.path.normcase(os.path.abspath(str(path)))
+
+    @staticmethod
+    def _conflict_name(destination: Path, index: int) -> Path:
+        stem = destination.stem
+        suffix = destination.suffix
+        tag = f"{AUTO_CONFLICT_SUFFIX}{index}"
+        available_stem_length = max(1, MAX_FILENAME_LENGTH - len(suffix) - len(tag))
+        trimmed_stem = stem[:available_stem_length]
+        return destination.with_name(f"{trimmed_stem}{tag}{suffix}")
+
+    def _resolve_conflicts(self, proposals: Iterable[RenameProposal]) -> list[RenameProposal]:
+        proposals = list(proposals)
+        sources = {self._path_key(proposal.source) for proposal in proposals}
+        used_destinations: set[str] = set()
+        resolved: list[RenameProposal] = []
+
+        for proposal in proposals:
+            destination = proposal.destination
+            destination_key = self._path_key(destination)
+            conflict = (
+                destination_key in used_destinations
+                or (destination.exists() and destination_key not in sources)
+            )
+
+            if conflict:
+                index = 1
+                while True:
+                    candidate = self._conflict_name(destination, index)
+                    candidate_key = self._path_key(candidate)
+                    if (
+                        candidate_key not in used_destinations
+                        and not candidate.exists()
+                        and candidate_key not in sources
+                    ):
+                        destination = candidate
+                        destination_key = candidate_key
+                        break
+                    index += 1
+                reason = f"{proposal.reason}, auto-conflict-resolution"
+                proposal = RenameProposal(
+                    proposal.source,
+                    destination,
+                    proposal.rule_id,
+                    proposal.changed,
+                    reason,
+                )
+
+            used_destinations.add(destination_key)
+            resolved.append(proposal)
+
+        self._validate_plan(resolved)
+        return resolved
 
     def _validate_plan(self, proposals: Iterable[RenameProposal]) -> None:
         proposals = list(proposals)
