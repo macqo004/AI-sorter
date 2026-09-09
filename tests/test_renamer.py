@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ai_sorter.renamer import (
     RemoveDuplicateSuffixRule,
     RemoveLeadingNonAlphanumericRule,
@@ -37,7 +39,7 @@ def test_rules_are_applied_sequentially() -> None:
     assert name == "Furina.jpg"
 
 
-def test_engine_rejects_destination_collision(tmp_path: Path) -> None:
+def test_engine_rejects_existing_destination(tmp_path: Path) -> None:
     source = tmp_path / " sample.txt"
     destination = tmp_path / "sample.txt"
     source.write_text("x", encoding="utf-8")
@@ -47,12 +49,22 @@ def test_engine_rejects_destination_collision(tmp_path: Path) -> None:
     proposals = engine.plan([source])
     assert len(proposals) == 1
 
-    try:
+    with pytest.raises(FileExistsError):
         engine.execute(proposals)
-    except FileExistsError:
-        pass
-    else:
-        raise AssertionError("Expected destination collision to be refused")
 
     assert source.exists()
     assert destination.read_text(encoding="utf-8") == "existing"
+
+
+def test_engine_reports_proposal_collision_without_attribute_error(tmp_path: Path) -> None:
+    first = tmp_path / " sample.txt"
+    second = tmp_path / "_sample.txt"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    engine = RenamerEngine()
+    with pytest.raises(FileExistsError, match="sample.txt"):
+        engine.plan([first, second])
+
+    assert first.exists()
+    assert second.exists()
