@@ -123,8 +123,10 @@ The rule does not modify an already-clean filename and does not change anything 
 Therefore:
 
 ```text
----.jpg             -> --- .jpg  [conceptually unchanged; actual filename preserved]
+---.jpg -> --- .jpg
 ```
+
+is **conceptually unchanged**; the actual filename remains exactly `---.jpg`.
 
 A filename consisting only of punctuation is preserved rather than converted into an empty or extension-only filename.
 
