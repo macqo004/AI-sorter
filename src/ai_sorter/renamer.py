@@ -116,7 +116,7 @@ class RenamerEngine:
 
     def _validate_plan(self, proposals: Iterable[RenameProposal]) -> None:
         proposals = list(proposals)
-        destinations: dict[str, Path] = {}
+        destinations: dict[str, RenameProposal] = {}
         sources = {self._path_key(proposal.source) for proposal in proposals}
         for proposal in proposals:
             destination_key = self._path_key(proposal.destination)
@@ -124,9 +124,10 @@ class RenamerEngine:
             if previous is not None:
                 raise FileExistsError(
                     "Multiple rename proposals target the same destination: "
-                    f"{previous.destination} and {proposal.destination}"
+                    f"{previous.source} -> {previous.destination}; "
+                    f"{proposal.source} -> {proposal.destination}"
                 )
-            destinations[destination_key] = proposal.destination
+            destinations[destination_key] = proposal
             if proposal.destination.exists() and self._path_key(proposal.destination) not in sources:
                 raise FileExistsError(
                     f"Rename refused because destination already exists: {proposal.destination}"
