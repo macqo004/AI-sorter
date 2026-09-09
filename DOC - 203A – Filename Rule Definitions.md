@@ -8,7 +8,7 @@
 
 **Module:** File Renamer – Rule Definitions
 
-**Version:** 2.0
+**Version:** 2.1
 
 **Status:** Draft
 
@@ -23,13 +23,13 @@ DOC-203
 
 # 1. Purpose
 
-This document defines the configurable rules used by the File Renamer module.
+This document defines the deterministic filename transformations used by the File Renamer module.
 
 DOC-203 defines the Renamer Engine and execution behaviour.
 
-DOC-203A defines what filename transformations are recognised and how they are configured.
+DOC-203A defines individual filename rules, their patterns, scope, and safety constraints.
 
-Separating these responsibilities allows filename rules to evolve without redesigning the Renamer Engine.
+Separating these responsibilities allows rules to evolve without redesigning the Renamer Engine. fileciteturn246file0
 
 ---
 
@@ -43,9 +43,9 @@ Filename rules shall be:
 * independently configurable;
 * independent of semantic image classification.
 
-A rule must never assume that a filename fragment has a particular meaning unless the rule explicitly defines that pattern as meaningful.
+A rule must operate on an explicitly defined filename pattern and must not infer semantic meaning from arbitrary text.
 
-When a rule cannot safely determine that a transformation is correct, the original filename must be preserved and Review Queue may be used.
+When a transformation would make a filename unsafe or empty, the original filename must be preserved.
 
 ---
 
@@ -65,49 +65,41 @@ conflict_policy
 version
 ```
 
-Additional properties may be introduced when justified.
-
-The rule definition must remain understandable to a technically competent user.
+The executable Renamer Engine accepts rules independently and applies them sequentially.
 
 ---
 
-# 4. Rule Independence
+# 4. Rule Ordering
 
-Rules may be enabled or disabled independently.
+Rules execute in the order supplied to the Renamer Engine.
 
-The system must not assume that all rules should always run.
+The output of one rule becomes the input of the next rule.
 
-Example:
+Current built-in ordering:
 
 ```text
-☑ Remove Duplicate Suffixes
-☑ Replace Spaces
-☐ Transliterate Characters
-☐ Convert To Lowercase
-☐ WWW Normalization
+1. remove_duplicate_suffix@1.0
+2. remove_leading_non_alphanumeric@1.0
 ```
 
-Only enabled rules participate in that execution.
+This ordering means that a name such as:
 
-The same rule may be run again later against the current filename.
+```text
+"  Furina (1).jpg"
+```
 
----
+is transformed as:
 
-# 5. Rule Ordering
-
-When several rules are executed in one Renamer execution, they are applied sequentially.
-
-Rules may have configurable execution priority.
-
-Where two rules have the same priority, their configuration order determines execution order.
-
-The project does not require a universal hard-coded rule order.
+```text
+"  Furina.jpg"
+"Furina.jpg"
+```
 
 ---
 
-# 6. Rule Categories
+# 5. Rule Categories
 
-Categories are organisational metadata and do not themselves determine execution order.
+Categories remain organisational metadata and do not themselves define execution order.
 
 Possible categories include:
 
@@ -120,33 +112,21 @@ TRANSLITERATION
 USER_DEFINED
 ```
 
-New categories may be added later.
-
 ---
 
-# 7. Pattern Matching
+# 6. Implemented Rule: Remove Duplicate Suffix
 
-A rule may act only on patterns explicitly defined by the rule.
+**Rule ID:** `remove_duplicate_suffix`
 
-Possible patterns include:
+**Version:** `1.0`
 
-```text
-trailing numeric suffix
-specific duplicate suffix format
-duplicated separator
-multiple consecutive spaces
-specific prefix
-specific suffix
-specific character sequence
-```
+**Category:** `DUPLICATE_REMOVAL`
 
-A visual resemblance to a known pattern is not sufficient when the rule could remove meaningful filename information.
+### 6.1 Purpose
 
----
+Remove an explicit numeric copy suffix from the end of the filename stem.
 
-# 8. Duplicate / Copy Suffixes
-
-The rule set may contain explicit patterns such as:
+### 6.2 Accepted patterns
 
 ```text
 (1)
@@ -155,204 +135,228 @@ The rule set may contain explicit patterns such as:
 {3}
 ```
 
-provided that the configured rule identifies the entire pattern and its location in the filename.
+Optional whitespace directly before the bracketed suffix is part of the removable pattern.
 
-A suffix such as:
-
-```text
-_1280_720
-```
-
-must not be treated as a duplicate suffix unless a specific rule explicitly defines it that way.
-
-Likewise:
+### 6.3 Examples
 
 ```text
-_artist (1)
+furina (1).jpg      -> furina.jpg
+furina [25].png     -> furina.png
+furina {3}.webp     -> furina.webp
+furina.jpg          -> furina.jpg
 ```
 
-must not be reduced to a different semantic name simply because a numeric suffix is present.
+### 6.4 Explicit exclusions
+
+The rule does not remove arbitrary textual suffixes such as:
+
+```text
+(copy)
+(final)
+artist
+```
+
+It does not treat values such as `_1280_720` as duplicate suffixes.
+
+### 6.5 Safety
+
+If removing the suffix would leave an empty stem, the original filename is preserved.
 
 ---
 
-# 9. Conservative Filename Semantics
+# 7. Implemented Rule: Remove Leading Non-Alphanumeric
 
-Rules must not attempt to understand the semantic meaning of a complete filename.
+**Rule ID:** `remove_leading_non_alphanumeric`
 
-For example:
+**Version:** `1.0`
+
+**Category:** `NORMALIZATION`
+
+### 7.1 Purpose
+
+Remove the complete leading sequence of Unicode characters for which `str.isalnum()` returns false from the filename stem.
+
+This includes, among others:
 
 ```text
-furina (1).jpg
+spaces
+_
+-
++
+.
+,
+(
+)
+[
+]
+{
+}
+@
+#
+$
+%
+&
 ```
 
-may safely match a duplicate-suffix rule.
+The rule is intentionally broader than a simple leading-space cleanup.
 
-But:
+### 7.2 Examples
+
+```text
+"  __--sample.png"  -> "sample.png"
+"---_ image.png"    -> "image.png"
+"_001_test.webp"    -> "001_test.webp"
+"---Furina.jpg"     -> "Furina.jpg"
+```
+
+A clean filename is left unchanged:
+
+```text
+Furina.jpg         -> Furina.jpg
+Furina_-test.jpg   -> Furina_-test.jpg
+```
+
+### 7.3 Safety
+
+A filename is not modified when its stem contains no alphanumeric character after the leading sequence.
+
+Therefore:
+
+```text
+---.jpg -> --- .jpg
+```
+
+is conceptually **unchanged**; the actual stored filename remains exactly `---.jpg`.
+
+The rule must never generate an empty stem or an extension-only filename.
+
+---
+
+# 8. Extension Handling
+
+Rules operate on the filename stem and preserve the existing extension unchanged.
+
+Examples:
+
+```text
+"  sample.PNG" -> "sample.PNG"
+"_001.webp"    -> "001.webp"
+```
+
+The rules do not convert extensions to lower case and do not change file format.
+
+---
+
+# 9. Pattern Matching
+
+A rule may act only on the pattern explicitly defined by that rule.
+
+A visual resemblance to a known pattern is not sufficient.
+
+No rule may remove meaningful filename content merely because it contains punctuation or bracketed text.
+
+---
+
+# 10. Conservative Filename Semantics
+
+Rules do not attempt to understand the semantic meaning of a complete filename.
+
+For example:
 
 ```text
 furina_drawn_by_artist (1).jpg
 ```
 
-must not be transformed into:
+may become:
 
 ```text
-furina.jpg
+furina_drawn_by_artist.jpg
 ```
 
-unless a separate explicit rule defines that complete transformation.
+under the duplicate-suffix rule, but the filename body is otherwise preserved.
 
----
-
-# 10. Replacement Definition
-
-Each rule shall define its replacement operation deterministically.
-
-Example:
+Likewise:
 
 ```text
-Input:
-furina (1).jpg
-
-Rule:
-Remove Duplicate Suffixes
-
-Output:
-furina.jpg
+artist (copy).jpg
 ```
 
-A replacement must not depend on undocumented heuristics.
+is not changed by `remove_duplicate_suffix` because `(copy)` is not an explicit numeric duplicate suffix.
 
 ---
 
 # 11. Conflict Policy
 
-A rule must defer to DOC-203 for actual filesystem conflict handling.
+The Renamer Engine, not an individual rule, owns filesystem conflict handling.
 
-At minimum, a rule must be capable of indicating that a proposed filename is unsafe when the resulting name already exists.
+The engine must not overwrite an existing file and must not silently invent an operating-system suffix.
 
-The Renamer Engine must not overwrite an existing file and must not silently invent an operating-system suffix.
+When multiple proposals target the same destination, the complete plan is rejected before execution.
 
 ---
 
 # 12. Ambiguous Matches
 
-If a filename appears to match a rule but the rule cannot determine the intended transformation safely, no automatic modification shall occur.
+When a rule cannot safely determine its transformation, the original filename is preserved.
 
-Example:
-
-```text
-example (copy).jpg
-```
-
-The rule must not automatically assume that `(copy)` is disposable unless that exact pattern is explicitly defined as safe.
-
-The case may be sent to Review Queue.
+The current built-in rules avoid semantic guessing and only perform explicit mechanical transformations.
 
 ---
 
-# 13. Review Queue Integration
-
-Ambiguous rule matches may generate Review Queue entries according to DOC-013.
-
-The entry should contain:
-
-```text
-module
-rule_id
-current filename
-proposed filename
-reason
-```
-
-The existence of a proposed transformation does not authorize its execution.
-
----
-
-# 14. Configuration
-
-The user shall be able to:
-
-* enable or disable rules;
-* configure rule parameters where supported;
-* configure execution priority;
-* inspect the active rule set.
-
-The rule configuration may be stored by the Configuration Manager according to DOC-008.
-
-The rule definition itself must not depend on hard-coded collection names or fixed paths.
-
----
-
-# 15. Versioning and Reproducibility
-
-Rule definitions should have explicit versions.
-
-A completed rename execution should record the rule version used so that the resulting change can be understood and, where appropriate, reversed.
-
-Changing a rule does not automatically imply that every existing filename must be renamed again. Re-execution remains user-initiated.
-
----
-
-# 16. Scope of Rules
+# 13. Scope
 
 Filename rules operate on file names only.
 
-Rules do not:
+They do not:
 
 * modify file contents;
-* alter SHA512;
+* alter SHA-512;
 * alter file identity;
 * classify images;
 * move files between directories;
-* modify directory names.
-
-Directory renaming, if ever required, should be treated as a separate operation with its own specification.
+* rename directories.
 
 ---
 
-# 17. Logging
+# 14. Versioning and Reproducibility
 
-Execution of every rule shall produce sufficient information for DOC-011 logging.
+Each rule has an explicit version.
 
-The record should identify:
+A completed rename execution should record the rule versions used so that the transformation can be reproduced and understood.
+
+Changing a rule does not imply that existing files must be renamed again.
+
+---
+
+# 15. Future Rules
+
+The architecture permits additional independently configurable rules such as:
 
 ```text
-rule_id
-rule_version
-file identity
-original filename
-resulting filename
-result
+multiple-space normalization
+character replacement
+transliteration
+lowercase conversion
+WWW preparation
+user-defined regular expressions
 ```
 
----
-
-# 18. Future Extensions
-
-Possible future extensions include:
-
-* custom regular-expression rules;
-* user-defined parameterised rules;
-* rule import/export;
-* shared rule libraries;
-* project-specific rule profiles.
-
-All future rules must remain compatible with the conservative transformation principle.
+These are not part of the current built-in rule set unless implemented and documented in a later version.
 
 ---
 
-# 19. Acceptance Criteria
+# 16. Acceptance Criteria
 
-The rule system is compliant when:
+The rule definition system is compliant when:
 
-* rules are independently configurable;
-* transformations are deterministic;
-* patterns are explicit;
-* ambiguous matches are not automatically executed;
+* each implemented rule has an explicit identifier and version;
+* rules are deterministic;
+* rules are applied sequentially;
+* the current two built-in rules behave exactly as specified above;
+* filenames without matches remain unchanged;
+* unsafe empty/extension-only results are prevented;
 * conflict handling remains under DOC-203;
-* rules do not modify file identity or image content;
-* rule versions can be recorded for reproducibility;
-* new rules can be added without redesigning the Renamer Engine.
+* adding a new rule does not require redesigning the engine.
 
 ---
 
