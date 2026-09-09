@@ -12,7 +12,8 @@ $RepoName = "AI-sorter"
 $PythonVersion = "3.13.15"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-$RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef"
+# Cache-bust the branch archive so repeated updates cannot reuse an older CDN copy.
+$RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef?cachebust=$([guid]::NewGuid().ToString('N'))"
 $SafeRefName = ($RepoRef -replace '[^A-Za-z0-9._-]', '_')
 $InstallerStateDir = Join-Path $env:LOCALAPPDATA "AI-Sorter"
 $InstallerStatePath = Join-Path $InstallerStateDir "last-install-path.txt"
@@ -244,7 +245,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "pip/setuptools installation failed." }
 
     # Always reinstall the local package so generated entry-point EXEs are refreshed.
-    & $PythonExe -m pip install --disable-pip-version-check --force-reinstall --no-deps $SourceRoot
+    # Disable pip's cache so an old locally cached wheel cannot survive an update.
+    & $PythonExe -m pip install --disable-pip-version-check --no-cache-dir --force-reinstall --no-deps $SourceRoot
     if ($LASTEXITCODE -ne 0) { throw "AI-Sorter package installation failed." }
 
     Write-Step "Creating launcher"
