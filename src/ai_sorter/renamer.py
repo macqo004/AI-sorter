@@ -1,6 +1,7 @@
 """Deterministic filename renaming engine and built-in filename rules."""
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,12 +71,7 @@ DEFAULT_RULES: tuple[FilenameRule, ...] = (
 
 
 class RenamerEngine:
-    """Plan and safely execute deterministic filename transformations.
-
-    The engine never overwrites an existing destination. A rename is only performed
-    when the transformed name differs from the current name and the destination does
-    not already exist.
-    """
+    """Plan and safely execute deterministic filename transformations."""
 
     def __init__(self, rules: Iterable[FilenameRule] = DEFAULT_RULES) -> None:
         self.rules = tuple(rules)
@@ -90,19 +86,20 @@ class RenamerEngine:
 
         current_name = source.name
         transformed_name = current_name
-        applied_rule_ids: list[str] = []
+        applied_rules: list[str] = []
         for rule in self.rules:
             next_name = rule.apply(transformed_name)
             if next_name != transformed_name:
                 transformed_name = next_name
-                applied_rule_ids.append(f"{rule.rule_id}@{rule.version}")
+                applied_rules.append(f"{rule.rule_id}@{rule.version}")
 
         if transformed_name == current_name:
             return RenameProposal(source, source, "", False, "No rule matched")
 
         destination = source.with_name(transformed_name)
-        reason = ", ".join(applied_rule_ids)
-        return RenameProposal(source, destination, reason.split("@", 1)[0] if len(applied_rule_ids) == 1 else "+".join(applied_rule_ids), True, reason)
+        reason = ", ".join(applied_rules)
+        rule_id = "+".join(applied_rules)
+        return RenameProposal(source, destination, rule_id, True, reason)
 
     def plan(self, sources: Iterable[Path]) -> list[RenameProposal]:
         proposals: list[RenameProposal] = []
@@ -110,27 +107,67 @@ class RenamerEngine:
             proposal = self.propose(source)
             if proposal is not None and proposal.changed:
                 proposals.append(proposal)
+        self._validate_plan(proposals)
         return proposals
 
-    def execute(self, proposals: Iterable[RenameProposal]) -> list[RenameProposal]:
-        executed: list[RenameProposal] = []
-        planned_destinations: set[Path] = set()
+    @staticmethod
+    def _path_key(path: Path) -> str:
+        return os.path.normcase(os.path.abspath(str(path)))
+
+    def _validate_plan(self, proposals: Iterable[RenameProposal]) -> None:
+        proposals = list(proposals)
+        destinations: dict[str, Path] = {}
+        sources = {self._path_key(proposal.source) for proposal in proposals}
         for proposal in proposals:
-            source = proposal.source
-            destination = proposal.destination
-            if not proposal.changed:
-                continue
-            if destination in planned_destinations:
-                raise FileExistsError(f"Multiple rename proposals target the same destination: {destination}")
-            if destination.exists():
+            destination_key = self._path_key(proposal.destination)
+            previous = destinations.get(destination_key)
+            if previous is not None:
                 raise FileExistsError(
-                    f"Rename refused because destination already exists: {destination}"
+                    "Multiple rename proposals target the same destination: "
+                    f"{previous.destination} and {proposal.destination}"
                 )
-            if not source.exists():
-                raise FileNotFoundError(f"Rename refused because source disappeared: {source}")
-            source.rename(destination)
-            planned_destinations.add(destination)
-            executed.append(proposal)
+            destinations[destination_key] = proposal.destination
+            if proposal.destination.exists() and self._path_key(proposal.destination) not in sources:
+                raise FileExistsError(
+                    f"Rename refused because destination already exists: {proposal.destination}"
+                )
+
+    def execute(self, proposals: Iterable[RenameProposal]) -> list[RenameProposal]:
+        proposals = list(proposals)
+        self._validate_plan(proposals)
+        for proposal in proposals:
+            if not proposal.source.exists():
+                raise FileNotFoundError(f"Rename refused because source disappeared: {proposal.source}")
+
+        executed: list[RenameProposal] = []
+        temporary: list[tuple[Path, Path, RenameProposal]] = []
+        try:
+            # Move every source to a private temporary name first. This prevents a
+            # destination from being occupied by an earlier rename in the same plan.
+            for index, proposal in enumerate(proposals):
+                temporary_path = proposal.source.with_name(
+                    f".{proposal.source.name}.ai-sorter-rename-{index}.tmp"
+                )
+                if temporary_path.exists():
+                    raise FileExistsError(
+                        f"Temporary rename path already exists: {temporary_path}"
+                    )
+                proposal.source.rename(temporary_path)
+                temporary.append((temporary_path, proposal.destination, proposal))
+
+            for temporary_path, destination, proposal in temporary:
+                temporary_path.rename(destination)
+                executed.append(proposal)
+        except Exception:
+            # Best-effort rollback only for files which have not reached their final
+            # destination yet. Never overwrite anything during rollback.
+            for temporary_path, destination, proposal in reversed(temporary):
+                try:
+                    if temporary_path.exists() and not proposal.source.exists():
+                        temporary_path.rename(proposal.source)
+                except OSError:
+                    pass
+            raise
         return executed
 
 
@@ -140,4 +177,7 @@ def iter_files(root: Path, *, recursive: bool = True) -> list[Path]:
     if not root.is_dir():
         raise NotADirectoryError(f"Not a directory: {root}")
     paths = root.rglob("*") if recursive else root.glob("*")
-    return sorted((path for path in paths if path.is_file()), key=lambda path: str(path).lower())
+    return sorted(
+        (path for path in paths if path.is_file()),
+        key=lambda path: str(path).lower(),
+    )
