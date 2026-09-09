@@ -13,7 +13,7 @@ $PythonVersion = "3.13.15"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 # Cache-bust the branch archive so repeated updates cannot reuse an older CDN copy.
-$RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/$RepoRef?cachebust=$([guid]::NewGuid().ToString('N'))"
+$RepoZipUrl = "https://codeload.github.com/$RepoOwner/$RepoName/zip/refs/heads/${RepoRef}?cachebust=$([guid]::NewGuid().ToString('N'))"
 $SafeRefName = ($RepoRef -replace '[^A-Za-z0-9._-]', '_')
 $InstallerStateDir = Join-Path $env:LOCALAPPDATA "AI-Sorter"
 $InstallerStatePath = Join-Path $InstallerStateDir "last-install-path.txt"
@@ -198,18 +198,10 @@ try {
         Download-File -Url $VcRedistUrl -Destination $VcInstaller
         $VcProcess = Start-Process -FilePath $VcInstaller -ArgumentList "/install", "/quiet", "/norestart" -Wait -PassThru
         switch ($VcProcess.ExitCode) {
-            0 {
-                Write-Host "Microsoft Visual C++ Runtime installed successfully." -ForegroundColor Green
-            }
-            1638 {
-                Write-Host "Microsoft Visual C++ Runtime was already installed by another package or version. Continuing." -ForegroundColor Green
-            }
-            3010 {
-                Write-Host "Microsoft Visual C++ Runtime installed successfully. Windows reports that a restart may be required; continuing without reboot." -ForegroundColor Yellow
-            }
-            default {
-                throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
-            }
+            0 { Write-Host "Microsoft Visual C++ Runtime installed successfully." -ForegroundColor Green }
+            1638 { Write-Host "Microsoft Visual C++ Runtime was already installed by another package or version. Continuing." -ForegroundColor Green }
+            3010 { Write-Host "Microsoft Visual C++ Runtime installed successfully. Windows reports that a restart may be required; continuing without reboot." -ForegroundColor Yellow }
+            default { throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)." }
         }
     }
 
@@ -230,15 +222,11 @@ try {
             "Shortcuts=0"
         )
         $Process = Start-Process -FilePath $PythonInstaller -ArgumentList $Arguments -Wait -PassThru
-        if ($Process.ExitCode -ne 0) {
-            throw "Python installer failed with exit code $($Process.ExitCode)."
-        }
+        if ($Process.ExitCode -ne 0) { throw "Python installer failed with exit code $($Process.ExitCode)." }
     }
 
     $PythonExe = Join-Path $PythonRoot "python.exe"
-    if (-not (Test-Path $PythonExe)) {
-        throw "Python installation completed without producing python.exe."
-    }
+    if (-not (Test-Path $PythonExe)) { throw "Python installation completed without producing python.exe." }
 
     Write-Step "Installing Python dependencies"
     & $PythonExe -m pip install --disable-pip-version-check --upgrade pip setuptools
@@ -310,9 +298,7 @@ $($_ | Out-String)
 
     Write-Host "`nINSTALLATION FAILED" -ForegroundColor Red
     Write-Host $Message -ForegroundColor Red
-    if ($InstallRoot) {
-        Write-Host "`nInstaller log: $InstallerLog" -ForegroundColor Yellow
-    }
+    if ($InstallRoot) { Write-Host "`nInstaller log: $InstallerLog" -ForegroundColor Yellow }
     Write-Host "`nNo image collection files are modified by this installer." -ForegroundColor Yellow
     Read-Host "Press ENTER to close"
     exit 1
