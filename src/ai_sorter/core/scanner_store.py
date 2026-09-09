@@ -132,6 +132,41 @@ class ScannerStore:
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać partii wyników skanowania w bazie danych.") from exc
 
+    def update_renamed_locations(self, paths: list[tuple[Path, Path]]) -> int:
+        """Update DB paths after successful filesystem renames, preserving SHA-512 identity."""
+        if not paths:
+            return 0
+        try:
+            with self.database.transaction() as connection:
+                updated = 0
+                for source, destination in paths:
+                    source_text = str(source.resolve())
+                    destination_text = str(destination.resolve())
+                    row = connection.execute(
+                        "SELECT sha512 FROM file_location WHERE absolute_path = ?",
+                        (source_text,),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    collision = connection.execute(
+                        "SELECT 1 FROM file_location WHERE absolute_path = ?",
+                        (destination_text,),
+                    ).fetchone()
+                    if collision is not None:
+                        raise DatabaseError(
+                            f"Nie można zaktualizować ścieżki w bazie — miejsce docelowe już istnieje w bazie: {destination_text}"
+                        )
+                    connection.execute(
+                        "UPDATE file_location SET absolute_path = ?, location_status = 'ACTIVE' WHERE absolute_path = ?",
+                        (destination_text, source_text),
+                    )
+                    updated += 1
+                return updated
+        except DatabaseError:
+            raise
+        except Exception as exc:
+            raise DatabaseError("Nie udało się zaktualizować ścieżek Renamera w bazie danych.") from exc
+
     def mark_missing_under_root(self, root: Path) -> int:
         root_text = str(root.resolve()).rstrip("\\/")
         pattern = root_text + "\\%"
