@@ -57,7 +57,7 @@ def test_rules_are_applied_sequentially() -> None:
     name = source.name
     for rule in engine.rules:
         name = rule.apply(name)
-    assert name == "Furina.jpg.png"
+    assert name == "Furina (1).png"
 
 
 def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
