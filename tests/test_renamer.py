@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 from ai_sorter.renamer import (
+    RemoveDuplicateImageExtensionRule,
     RemoveDuplicateSuffixRule,
     RemoveLeadingNonAlphanumericRule,
+    RemoveTrailingNonAlphanumericRule,
     RenamerEngine,
 )
 
@@ -29,14 +31,33 @@ def test_remove_leading_non_alphanumeric() -> None:
     assert rule.apply("---.jpg") == "---.jpg"
 
 
+def test_remove_trailing_non_alphanumeric() -> None:
+    rule = RemoveTrailingNonAlphanumericRule()
+    assert rule.apply("5_.jpg") == "5.jpg"
+    assert rule.apply("5---.png") == "5.png"
+    assert rule.apply("5___--_.webp") == "5.webp"
+    assert rule.apply("Furina_-test.jpg") == "Furina_-test.jpg"
+    assert rule.apply("---.jpg") == "---.jpg"
+
+
+def test_remove_duplicate_image_extension() -> None:
+    rule = RemoveDuplicateImageExtensionRule()
+    assert rule.apply("5.jpg.png") == "5.png"
+    assert rule.apply("image.jpeg.jpg") == "image.jpg"
+    assert rule.apply("foo.webp.png") == "foo.png"
+    assert rule.apply("foo.version.jpg") == "foo.version.jpg"
+    assert rule.apply("foo.txt.jpg") == "foo.txt.jpg"
+    assert rule.apply("foo.jpg") == "foo.jpg"
+
+
 def test_rules_are_applied_sequentially() -> None:
     engine = RenamerEngine()
-    source = Path(r"M:\anime\example\  Furina (1).jpg")
+    source = Path(r"M:\anime\example\  Furina (1)__.jpg.png")
     # Use the rule pipeline without requiring a real file.
     name = source.name
     for rule in engine.rules:
         name = rule.apply(name)
-    assert name == "Furina.jpg"
+    assert name == "Furina.jpg.png"
 
 
 def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
