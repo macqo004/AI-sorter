@@ -9,6 +9,10 @@ from typing import Iterable, Protocol
 
 
 DUPLICATE_SUFFIX_RE = re.compile(r"(?:\s*\(\d+\)|\s*\[\d+\]|\s*\{\d+\})$")
+DUPLICATE_IMAGE_EXTENSION_RE = re.compile(
+    r"(?i)(\.(?:jpe?g|png|webp|gif|bmp|pns))$"
+)
+IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
 MAX_FILENAME_LENGTH = 255
 AUTO_CONFLICT_SUFFIX = "__dup-"
 
@@ -66,9 +70,52 @@ class RemoveLeadingNonAlphanumericRule:
         return f"{stem[index:]}{suffix}"
 
 
+@dataclass(frozen=True, slots=True)
+class RemoveTrailingNonAlphanumericRule:
+    """Remove the complete trailing run of non-alphanumeric Unicode characters from the stem."""
+
+    rule_id: str = "remove_trailing_non_alphanumeric"
+    version: str = "1.0"
+
+    def apply(self, filename: str) -> str:
+        path = Path(filename)
+        stem = path.stem
+        suffix = path.suffix
+        index = len(stem)
+        while index > 0 and not stem[index - 1].isalnum():
+            index -= 1
+        if index == len(stem) or index == 0:
+            return filename
+        return f"{stem[:index]}{suffix}"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveDuplicateImageExtensionRule:
+    """Remove a repeated known image extension immediately before the final extension."""
+
+    rule_id: str = "remove_duplicate_image_extension"
+    version: str = "1.0"
+
+    def apply(self, filename: str) -> str:
+        path = Path(filename)
+        suffix = path.suffix
+        if suffix.lower() not in IMAGE_EXTENSIONS:
+            return filename
+        stem = path.stem
+        match = DUPLICATE_IMAGE_EXTENSION_RE.search(stem)
+        if not match:
+            return filename
+        transformed = stem[: match.start()]
+        if not transformed:
+            return filename
+        return f"{transformed}{suffix}"
+
+
 DEFAULT_RULES: tuple[FilenameRule, ...] = (
     RemoveDuplicateSuffixRule(),
     RemoveLeadingNonAlphanumericRule(),
+    RemoveTrailingNonAlphanumericRule(),
+    RemoveDuplicateImageExtensionRule(),
 )
 
 
@@ -196,8 +243,6 @@ class RenamerEngine:
         executed: list[RenameProposal] = []
         temporary: list[tuple[Path, Path, RenameProposal]] = []
         try:
-            # Move every source to a private temporary name first. This prevents a
-            # destination from being occupied by an earlier rename in the same plan.
             for index, proposal in enumerate(proposals):
                 temporary_path = proposal.source.with_name(
                     f".{proposal.source.name}.ai-sorter-rename-{index}.tmp"
@@ -213,8 +258,6 @@ class RenamerEngine:
                 temporary_path.rename(destination)
                 executed.append(proposal)
         except Exception:
-            # Best-effort rollback only for files which have not reached their final
-            # destination yet. Never overwrite anything during rollback.
             for temporary_path, destination, proposal in reversed(temporary):
                 try:
                     if temporary_path.exists() and not proposal.source.exists():
