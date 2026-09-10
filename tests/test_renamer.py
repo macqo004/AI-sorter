@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from ai_sorter.renamer import (
+    RemoveAutoConflictSuffixRule,
     RemoveDuplicateImageExtensionRule,
     RemoveDuplicateSuffixRule,
     RemoveLeadingNonAlphanumericRule,
@@ -19,6 +20,14 @@ def test_remove_duplicate_suffix() -> None:
     assert rule.apply("furina [25].png") == "furina.png"
     assert rule.apply("furina {3}.webp") == "furina.webp"
     assert rule.apply("furina.jpg") == "furina.jpg"
+
+
+def test_remove_auto_conflict_suffix() -> None:
+    rule = RemoveAutoConflictSuffixRule()
+    assert rule.apply("sample_x.jpg") == "sample.jpg"
+    assert rule.apply("sample_x2.jpg") == "sample.jpg"
+    assert rule.apply("sample_xx.jpg") == "sample_xx.jpg"
+    assert rule.apply("sample.jpg") == "sample.jpg"
 
 
 def test_remove_leading_non_alphanumeric() -> None:
@@ -52,12 +61,12 @@ def test_remove_duplicate_image_extension() -> None:
 
 def test_rules_are_applied_sequentially() -> None:
     engine = RenamerEngine()
-    source = Path(r"M:\anime\example\  Furina (1)__.jpg.png")
+    source = Path(r"M:\anime\example\  Furina (1)___.jpg.png")
     # Use the rule pipeline without requiring a real file.
     name = source.name
     for rule in engine.rules:
         name = rule.apply(name)
-    assert name == "Furina (1).png"
+    assert name == "Furina.jpg.png"
 
 
 def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
@@ -69,14 +78,14 @@ def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
     engine = RenamerEngine()
     proposals = engine.plan([source])
     assert len(proposals) == 1
-    assert proposals[0].destination == tmp_path / "sample__dup-1.txt"
+    assert proposals[0].destination == tmp_path / "sample_x.txt"
     assert "auto-conflict-resolution" in proposals[0].reason
 
     engine.execute(proposals)
 
     assert not source.exists()
     assert destination.read_text(encoding="utf-8") == "existing"
-    assert (tmp_path / "sample__dup-1.txt").read_text(encoding="utf-8") == "x"
+    assert (tmp_path / "sample_x.txt").read_text(encoding="utf-8") == "x"
 
 
 def test_engine_auto_resolves_proposal_collision(tmp_path: Path) -> None:
@@ -90,10 +99,34 @@ def test_engine_auto_resolves_proposal_collision(tmp_path: Path) -> None:
 
     assert [proposal.destination.name for proposal in proposals] == [
         "sample.txt",
-        "sample__dup-1.txt",
+        "sample_x.txt",
     ]
 
     engine.execute(proposals)
 
     assert (tmp_path / "sample.txt").read_text(encoding="utf-8") == "first"
-    assert (tmp_path / "sample__dup-1.txt").read_text(encoding="utf-8") == "second"
+    assert (tmp_path / "sample_x.txt").read_text(encoding="utf-8") == "second"
+
+
+def test_engine_removes_own_conflict_suffix_when_base_is_free(tmp_path: Path) -> None:
+    source = tmp_path / "sample_x.jpg"
+    source.write_text("x", encoding="utf-8")
+
+    engine = RenamerEngine()
+    proposals = engine.plan([source])
+
+    assert len(proposals) == 1
+    assert proposals[0].destination == tmp_path / "sample.jpg"
+
+
+def test_engine_keeps_own_conflict_suffix_when_base_is_occupied(tmp_path: Path) -> None:
+    base = tmp_path / "sample.jpg"
+    source = tmp_path / "sample_x.jpg"
+    base.write_text("base", encoding="utf-8")
+    source.write_text("x", encoding="utf-8")
+
+    engine = RenamerEngine()
+    proposals = engine.plan([source])
+
+    assert len(proposals) == 1
+    assert proposals[0].destination == tmp_path / "sample_x.jpg"
