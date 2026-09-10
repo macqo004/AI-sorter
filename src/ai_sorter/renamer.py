@@ -53,6 +53,23 @@ class RemoveDuplicateSuffixRule:
 
 
 @dataclass(frozen=True, slots=True)
+class RemoveAutoConflictSuffixRule:
+    """Remove the Renamer's own conflict suffix; conflicts are re-applied by the engine."""
+
+    rule_id: str = "remove_auto_conflict_suffix"
+    version: str = "1.0"
+
+    def apply(self, filename: str) -> str:
+        path = Path(filename)
+        stem = path.stem
+        suffix = path.suffix
+        transformed = AUTO_CONFLICT_SUFFIX_RE.sub("", stem)
+        if not transformed:
+            return filename
+        return f"{transformed}{suffix}"
+
+
+@dataclass(frozen=True, slots=True)
 class RemoveLeadingNonAlphanumericRule:
     """Remove the complete leading run of non-alphanumeric Unicode characters."""
 
@@ -107,23 +124,6 @@ class RemoveDuplicateImageExtensionRule:
         if not match:
             return filename
         transformed = stem[: match.start()]
-        if not transformed:
-            return filename
-        return f"{transformed}{suffix}"
-
-
-@dataclass(frozen=True, slots=True)
-class RemoveAutoConflictSuffixRule:
-    """Remove the Renamer's own conflict suffix; conflicts are re-applied by the engine."""
-
-    rule_id: str = "remove_auto_conflict_suffix"
-    version: str = "1.0"
-
-    def apply(self, filename: str) -> str:
-        path = Path(filename)
-        stem = path.stem
-        suffix = path.suffix
-        transformed = AUTO_CONFLICT_SUFFIX_RE.sub("", stem)
         if not transformed:
             return filename
         return f"{transformed}{suffix}"
@@ -205,10 +205,26 @@ class RenamerEngine:
             )
 
             if conflict:
+                # If this file already carries our own _x suffix and the clean
+                # destination is still occupied, keep the file in place. It is
+                # already the deliberate conflict representation from a previous run.
+                source_key = self._path_key(proposal.source)
+                if destination_key != source_key and AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem):
+                    continue
+
                 index = 1
                 while True:
                     candidate = self._conflict_name(destination, index)
                     candidate_key = self._path_key(candidate)
+                    if candidate_key == source_key:
+                        resolved.append(proposal.__class__(
+                            proposal.source,
+                            proposal.source,
+                            proposal.rule_id,
+                            False,
+                            "Conflict retained existing _x suffix",
+                        ))
+                        break
                     if (
                         candidate_key not in used_destinations
                         and not candidate.exists()
@@ -218,6 +234,10 @@ class RenamerEngine:
                         destination_key = candidate_key
                         break
                     index += 1
+                if not proposal.changed:
+                    continue
+                if destination_key == source_key:
+                    continue
                 reason = f"{proposal.reason}, auto-conflict-resolution"
                 proposal = RenameProposal(
                     proposal.source,
@@ -238,6 +258,8 @@ class RenamerEngine:
         destinations: dict[str, RenameProposal] = {}
         sources = {self._path_key(proposal.source) for proposal in proposals}
         for proposal in proposals:
+            if not proposal.changed:
+                continue
             destination_key = self._path_key(proposal.destination)
             previous = destinations.get(destination_key)
             if previous is not None:
@@ -253,7 +275,7 @@ class RenamerEngine:
                 )
 
     def execute(self, proposals: Iterable[RenameProposal]) -> list[RenameProposal]:
-        proposals = list(proposals)
+        proposals = [proposal for proposal in proposals if proposal.changed]
         self._validate_plan(proposals)
         for proposal in proposals:
             if not proposal.source.exists():
