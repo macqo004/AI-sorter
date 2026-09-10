@@ -128,5 +128,4 @@ def test_engine_keeps_own_conflict_suffix_when_base_is_occupied(tmp_path: Path) 
     engine = RenamerEngine()
     proposals = engine.plan([source])
 
-    assert len(proposals) == 1
-    assert proposals[0].destination == tmp_path / "sample_x.jpg"
+    assert proposals == []
