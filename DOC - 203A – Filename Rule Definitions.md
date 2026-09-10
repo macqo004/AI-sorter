@@ -79,21 +79,26 @@ Current built-in ordering:
 
 ```text
 1. remove_duplicate_suffix@1.0
-2. remove_leading_non_alphanumeric@1.0
-3. remove_trailing_non_alphanumeric@1.0
-4. remove_duplicate_image_extension@1.0
-5. engine-level automatic conflict resolution
+2. remove_auto_conflict_suffix@1.0
+3. remove_leading_non_alphanumeric@1.0
+4. remove_trailing_non_alphanumeric@1.0
+5. remove_duplicate_image_extension@1.0
 ```
 
-This ordering allows transformations to be combined deterministically.
+This ordering means that an automatically generated `_x` conflict marker is stripped before ordinary filename normalization. The engine then decides whether the clean name is currently available. If it is still occupied, the existing `_x` marker is retained rather than generating another suffix.
 
-For example:
+Example:
 
 ```text
-"  Furina (1)__ .jpg.png"
+sample.jpg       -> sample.jpg
+sample_x.jpg     -> sample_x.jpg   (while sample.jpg exists)
 ```
 
-is processed by the individual rules in sequence rather than as one opaque transformation.
+After `sample.jpg` is removed:
+
+```text
+sample_x.jpg     -> sample.jpg
+```
 
 ---
 
@@ -164,7 +169,54 @@ If removing the suffix would leave an empty stem, the original filename is prese
 
 ---
 
-# 7. Implemented Rule: Remove Leading Non-Alphanumeric
+# 7. Implemented Rule: Remove Auto-Conflict Suffix
+
+**Rule ID:** `remove_auto_conflict_suffix`
+
+**Version:** `1.0`
+
+**Category:** `DUPLICATE_REMOVAL`
+
+### 7.1 Purpose
+
+Remove the Renamer's own automatically generated conflict suffix so that a later run can restore the clean filename when the original conflict no longer exists.
+
+### 7.2 Accepted patterns
+
+```text
+_x
+_x2
+_x3
+...
+```
+
+The suffix is matched only at the end of the filename stem and is case-insensitive.
+
+### 7.3 Examples
+
+When the clean destination is free:
+
+```text
+sample_x.jpg      -> sample.jpg
+sample_x2.jpg     -> sample.jpg
+```
+
+When the clean destination is still occupied, the engine conflict policy restores the `_x` form instead of repeatedly changing the name.
+
+```text
+sample.jpg exists
+sample_x.jpg      -> sample_x.jpg
+```
+
+### 7.4 Safety
+
+The rule is reversible and engine-aware. It does not force a rename when removing `_x` would recreate a current collision.
+
+The `_x` marker is therefore reserved for the Renamer's own conflict-resolution scheme. A filename ending in `_x` may still be preserved when the clean destination is occupied.
+
+---
+
+# 8. Implemented Rule: Remove Leading Non-Alphanumeric
 
 **Rule ID:** `remove_leading_non_alphanumeric`
 
@@ -172,7 +224,7 @@ If removing the suffix would leave an empty stem, the original filename is prese
 
 **Category:** `NORMALIZATION`
 
-### 7.1 Purpose
+### 8.1 Purpose
 
 Remove the complete leading sequence of Unicode characters for which `str.isalnum()` returns false from the filename stem.
 
@@ -200,7 +252,7 @@ $
 
 The rule is intentionally broader than a simple leading-space cleanup.
 
-### 7.2 Examples
+### 8.2 Examples
 
 ```text
 "  __--sample.png"  -> "sample.png"
@@ -216,7 +268,7 @@ Furina.jpg         -> Furina.jpg
 Furina_-test.jpg   -> Furina_-test.jpg
 ```
 
-### 7.3 Safety
+### 8.3 Safety
 
 A filename is not modified when its stem contains no alphanumeric character after the leading sequence.
 
@@ -232,7 +284,7 @@ The rule must never generate an empty stem or an extension-only filename.
 
 ---
 
-# 8. Implemented Rule: Remove Trailing Non-Alphanumeric
+# 9. Implemented Rule: Remove Trailing Non-Alphanumeric
 
 **Rule ID:** `remove_trailing_non_alphanumeric`
 
@@ -240,35 +292,28 @@ The rule must never generate an empty stem or an extension-only filename.
 
 **Category:** `NORMALIZATION`
 
-### 8.1 Purpose
+### 9.1 Purpose
 
 Remove the complete trailing sequence of Unicode characters for which `str.isalnum()` returns false from the filename stem.
 
-This handles orphan punctuation and separator characters left at the end of a filename before its extension.
-
-### 8.2 Examples
+### 9.2 Examples
 
 ```text
-5_.jpg             -> 5.jpg
-5---.png           -> 5.png
-5___--_.webp       -> 5.webp
+5_.jpg            -> 5.jpg
+5---.png          -> 5.png
+5___--_.webp      -> 5.webp
+Furina_-test.jpg  -> Furina_-test.jpg
 ```
 
-Characters in the middle of the stem are preserved:
+The rule removes only the trailing sequence. Characters in the middle of the filename remain unchanged.
 
-```text
-Furina_-test.jpg   -> Furina_-test.jpg
-```
+### 9.3 Safety
 
-### 8.3 Safety
-
-If the entire stem consists only of non-alphanumeric characters, the original filename is preserved.
-
-The rule never produces an empty stem or an extension-only filename.
+If removing the trailing sequence would leave an empty stem, the original filename is preserved.
 
 ---
 
-# 9. Implemented Rule: Remove Duplicate Image Extension
+# 10. Implemented Rule: Remove Duplicate Image Extension
 
 **Rule ID:** `remove_duplicate_image_extension`
 
@@ -276,11 +321,11 @@ The rule never produces an empty stem or an extension-only filename.
 
 **Category:** `NORMALIZATION`
 
-### 9.1 Purpose
+### 10.1 Purpose
 
-Remove a repeated known image extension immediately before the final file extension.
+Remove one repeated, known image extension immediately before the final image extension.
 
-Supported image extensions for this rule are:
+### 10.2 Recognised image extensions
 
 ```text
 .jpg
@@ -292,125 +337,60 @@ Supported image extensions for this rule are:
 .pns
 ```
 
-Matching is case-insensitive, but the final extension itself is preserved exactly as stored.
+Matching is case-insensitive.
 
-### 9.2 Examples
-
-```text
-5.jpg.png          -> 5.png
-image.jpeg.jpg     -> image.jpg
-foo.webp.png       -> foo.png
-```
-
-### 9.3 Explicit exclusions
-
-The rule does not remove arbitrary dotted text from a filename:
+### 10.3 Examples
 
 ```text
-foo.version.jpg    -> foo.version.jpg
-foo.txt.jpg        -> foo.txt.jpg
+5.jpg.png       -> 5.png
+image.jpeg.jpg  -> image.jpg
+foo.webp.png    -> foo.png
 ```
 
-Only a recognised image extension immediately before another recognised final image extension is removed.
+Normal names remain unchanged:
 
-### 9.4 Safety
+```text
+foo.version.jpg -> foo.version.jpg
+foo.txt.jpg     -> foo.txt.jpg
+foo.jpg         -> foo.jpg
+```
 
-If removing the duplicate image extension would leave an empty stem, the original filename is preserved.
+### 10.4 Safety
+
+The rule does not remove arbitrary dotted text. It only removes a recognised image extension immediately preceding the final recognised image extension.
 
 ---
 
-# 10. Extension Handling
-
-Rules operate on the filename stem and preserve the final extension, including its original case.
-
-Examples:
-
-```text
-"  sample.PNG" -> "sample.PNG"
-"_001.webp"    -> "001.webp"
-```
-
-The rules do not convert the final extension to lower case and do not change file format.
-
-The duplicate-image-extension rule is the only current rule that intentionally removes an earlier recognised image extension from the stem.
-
----
-
-# 11. Pattern Matching
-
-A rule may act only on the pattern explicitly defined by that rule.
-
-A visual resemblance to a known pattern is not sufficient.
-
-No rule may remove meaningful filename content merely because it contains punctuation or bracketed text.
-
----
-
-# 12. Conservative Filename Semantics
-
-Rules do not attempt to understand the semantic meaning of a complete filename.
-
-For example:
-
-```text
-furina_drawn_by_artist (1).jpg
-```
-
-may become:
-
-```text
-furina_drawn_by_artist.jpg
-```
-
-under the duplicate-suffix rule, but the filename body is otherwise preserved.
-
-Likewise:
-
-```text
-artist (copy).jpg
-```
-
-is not changed by `remove_duplicate_suffix` because `(copy)` is not an explicit numeric duplicate suffix.
-
----
-
-# 13. Conflict Policy
+# 11. Conflict Policy
 
 The Renamer Engine, not an individual rule, owns filesystem conflict handling.
 
 The engine must never overwrite an existing file.
 
-When multiple proposals target the same destination, the engine resolves the collision automatically rather than requiring manual intervention.
-
-The preferred destination is kept for the first deterministic proposal. Subsequent conflicting proposals receive a free deterministic suffix of the form:
+When a clean transformed destination is occupied, the engine automatically selects a free `_x` variant:
 
 ```text
-__dup-1
-__dup-2
-__dup-3
+sample.jpg       exists
+sample source    -> sample_x.jpg
 ```
 
-For example:
+For subsequent conflicts in the same namespace:
 
 ```text
- sample.jpg  -> sample.jpg
-_sample.jpg  -> sample__dup-1.jpg
+sample.jpg       exists
+sample_x.jpg     exists
+sample source    -> sample_x2.jpg
 ```
 
-An existing file that already occupies the preferred destination is also preserved:
+The `_x` suffix is deliberately reversible. The `remove_auto_conflict_suffix` rule removes it during planning, and conflict resolution restores it only when necessary.
 
-```text
-sample.jpg       [already exists]
- sample.jpg      -> sample__dup-1.jpg
-```
+A file already carrying `_x`/`_x2` is not forcibly renamed while its clean destination remains occupied. This avoids oscillating names on repeated Renamer runs.
 
-The engine continues searching for the next free suffix when required.
-
-The collision-resolution process is deterministic for a deterministic input ordering and never overwrites an existing destination.
+No operating-system-generated suffix such as `" (1)"` is used by the Renamer's conflict handler.
 
 ---
 
-# 14. Ambiguous Matches
+# 12. Ambiguous Matches
 
 When a rule cannot safely determine its transformation, the original filename is preserved.
 
@@ -418,7 +398,7 @@ The current built-in rules avoid semantic guessing and only perform explicit mec
 
 ---
 
-# 15. Scope
+# 13. Scope
 
 Filename rules operate on file names only.
 
@@ -433,7 +413,7 @@ They do not:
 
 ---
 
-# 16. Versioning and Reproducibility
+# 14. Versioning and Reproducibility
 
 Each rule has an explicit version.
 
@@ -443,7 +423,7 @@ Changing a rule does not imply that existing files must be renamed again.
 
 ---
 
-# 17. Future Rules
+# 15. Future Rules
 
 The architecture permits additional independently configurable rules such as:
 
@@ -460,18 +440,18 @@ These are not part of the current built-in rule set unless implemented and docum
 
 ---
 
-# 18. Acceptance Criteria
+# 16. Acceptance Criteria
 
 The rule definition system is compliant when:
 
 * each implemented rule has an explicit identifier and version;
 * rules are deterministic;
 * rules are applied sequentially;
-* the current four built-in rules behave exactly as specified above;
+* the five current built-in rules behave exactly as specified above;
 * filenames without matches remain unchanged;
 * unsafe empty/extension-only results are prevented;
 * conflict handling remains under DOC-203;
-* conflicts are resolved without overwriting existing files;
+* `_x` conflict markers can be removed when their clean destination becomes free;
 * adding a new rule does not require redesigning the engine.
 
 ---
