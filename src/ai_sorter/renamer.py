@@ -199,17 +199,18 @@ class RenamerEngine:
         for proposal in proposals:
             destination = proposal.destination
             destination_key = self._path_key(destination)
+            source_key = self._path_key(proposal.source)
             conflict = (
                 destination_key in used_destinations
                 or (destination.exists() and destination_key not in sources)
             )
 
             if conflict:
-                # If this file already carries our own _x suffix and the clean
-                # destination is still occupied, keep the file in place. It is
-                # already the deliberate conflict representation from a previous run.
-                source_key = self._path_key(proposal.source)
-                if destination_key != source_key and AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem):
+                # A source carrying the Renamer's own _x suffix means that a
+                # previous run had already resolved this conflict. Keep it as-is
+                # while the clean destination remains occupied. If the clean
+                # destination becomes free, the rule above removes _x normally.
+                if AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem):
                     continue
 
                 index = 1
@@ -217,14 +218,7 @@ class RenamerEngine:
                     candidate = self._conflict_name(destination, index)
                     candidate_key = self._path_key(candidate)
                     if candidate_key == source_key:
-                        resolved.append(proposal.__class__(
-                            proposal.source,
-                            proposal.source,
-                            proposal.rule_id,
-                            False,
-                            "Conflict retained existing _x suffix",
-                        ))
-                        break
+                        continue
                     if (
                         candidate_key not in used_destinations
                         and not candidate.exists()
@@ -234,10 +228,6 @@ class RenamerEngine:
                         destination_key = candidate_key
                         break
                     index += 1
-                if not proposal.changed:
-                    continue
-                if destination_key == source_key:
-                    continue
                 reason = f"{proposal.reason}, auto-conflict-resolution"
                 proposal = RenameProposal(
                     proposal.source,
@@ -256,7 +246,7 @@ class RenamerEngine:
     def _validate_plan(self, proposals: Iterable[RenameProposal]) -> None:
         proposals = list(proposals)
         destinations: dict[str, RenameProposal] = {}
-        sources = {self._path_key(proposal.source) for proposal in proposals}
+        sources = {self._path_key(proposal.source) for proposal in proposals if proposal.changed}
         for proposal in proposals:
             if not proposal.changed:
                 continue
