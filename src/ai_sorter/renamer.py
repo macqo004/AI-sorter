@@ -12,9 +12,10 @@ DUPLICATE_SUFFIX_RE = re.compile(r"(?:\s*\(\d+\)|\s*\[\d+\]|\s*\{\d+\})$")
 DUPLICATE_IMAGE_EXTENSION_RE = re.compile(
     r"(?i)(\.(?:jpe?g|png|webp|gif|bmp|pns))$"
 )
+AUTO_CONFLICT_SUFFIX_RE = re.compile(r"(?i)_x(?:\d+)?$")
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
 MAX_FILENAME_LENGTH = 255
-AUTO_CONFLICT_SUFFIX = "__dup-"
+AUTO_CONFLICT_SUFFIX = "_x"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,8 +112,26 @@ class RemoveDuplicateImageExtensionRule:
         return f"{transformed}{suffix}"
 
 
+@dataclass(frozen=True, slots=True)
+class RemoveAutoConflictSuffixRule:
+    """Remove the Renamer's own conflict suffix; conflicts are re-applied by the engine."""
+
+    rule_id: str = "remove_auto_conflict_suffix"
+    version: str = "1.0"
+
+    def apply(self, filename: str) -> str:
+        path = Path(filename)
+        stem = path.stem
+        suffix = path.suffix
+        transformed = AUTO_CONFLICT_SUFFIX_RE.sub("", stem)
+        if not transformed:
+            return filename
+        return f"{transformed}{suffix}"
+
+
 DEFAULT_RULES: tuple[FilenameRule, ...] = (
     RemoveDuplicateSuffixRule(),
+    RemoveAutoConflictSuffixRule(),
     RemoveLeadingNonAlphanumericRule(),
     RemoveTrailingNonAlphanumericRule(),
     RemoveDuplicateImageExtensionRule(),
@@ -166,7 +185,7 @@ class RenamerEngine:
     def _conflict_name(destination: Path, index: int) -> Path:
         stem = destination.stem
         suffix = destination.suffix
-        tag = f"{AUTO_CONFLICT_SUFFIX}{index}"
+        tag = AUTO_CONFLICT_SUFFIX if index == 1 else f"{AUTO_CONFLICT_SUFFIX}{index}"
         available_stem_length = max(1, MAX_FILENAME_LENGTH - len(suffix) - len(tag))
         trimmed_stem = stem[:available_stem_length]
         return destination.with_name(f"{trimmed_stem}{tag}{suffix}")
