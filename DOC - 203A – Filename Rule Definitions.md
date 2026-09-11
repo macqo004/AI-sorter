@@ -8,7 +8,7 @@
 
 **Module:** File Renamer – Rule Definitions
 
-**Version:** 2.2
+**Version:** 2.3
 
 **Status:** Draft
 
@@ -79,26 +79,13 @@ Current built-in ordering:
 
 ```text
 1. remove_duplicate_suffix@1.0
-2. remove_auto_conflict_suffix@1.0
+2. remove_auto_conflict_suffix@2.0
 3. remove_leading_non_alphanumeric@1.0
 4. remove_trailing_non_alphanumeric@1.0
 5. remove_duplicate_image_extension@1.0
 ```
 
-This ordering means that an automatically generated `_x` conflict marker is stripped before ordinary filename normalization. The engine then decides whether the clean name is currently available. If it is still occupied, the existing `_x` marker is retained rather than generating another suffix.
-
-Example:
-
-```text
-sample.jpg       -> sample.jpg
-sample_x.jpg     -> sample_x.jpg   (while sample.jpg exists)
-```
-
-After `sample.jpg` is removed:
-
-```text
-sample_x.jpg     -> sample.jpg
-```
+The auto-conflict suffix rule runs before ordinary normalization so that old or current Renamer-generated conflict markers can be removed before the engine decides whether the clean destination is currently available.
 
 ---
 
@@ -173,7 +160,7 @@ If removing the suffix would leave an empty stem, the original filename is prese
 
 **Rule ID:** `remove_auto_conflict_suffix`
 
-**Version:** `1.0`
+**Version:** `2.0`
 
 **Category:** `DUPLICATE_REMOVAL`
 
@@ -181,38 +168,63 @@ If removing the suffix would leave an empty stem, the original filename is prese
 
 Remove the Renamer's own automatically generated conflict suffix so that a later run can restore the clean filename when the original conflict no longer exists.
 
-### 7.2 Accepted patterns
+The current format is:
+
+```text
+_x01
+_x02
+_x03
+...
+```
+
+The first generated conflict suffix is always `_x01`.
+
+### 7.2 Legacy patterns migrated automatically
+
+The rule also recognises previous Renamer-generated forms:
 
 ```text
 _x
 _x2
 _x3
 ...
+__dup-1
+__dup-2
+__dup-3
+...
 ```
 
-The suffix is matched only at the end of the filename stem and is case-insensitive.
+These are treated as Renamer-owned conflict markers and are removed during planning. If the clean name is still occupied, the engine assigns the new format starting at `_x01`.
 
-### 7.3 Examples
-
-When the clean destination is free:
+### 7.3 Examples when the clean destination is free
 
 ```text
-sample_x.jpg      -> sample.jpg
-sample_x2.jpg     -> sample.jpg
+sample_x01.jpg     -> sample.jpg
+sample_x12.jpg     -> sample.jpg
+sample_x.jpg       -> sample.jpg
+sample__dup-1.jpg  -> sample.jpg
+sample__dup-25.jpg -> sample.jpg
 ```
 
-When the clean destination is still occupied, the engine conflict policy restores the `_x` form instead of repeatedly changing the name.
+### 7.4 Examples when the clean destination remains occupied
 
 ```text
 sample.jpg exists
-sample_x.jpg      -> sample_x.jpg
+sample_x01.jpg     -> sample_x01.jpg
 ```
 
-### 7.4 Safety
+A legacy marker is migrated to the new format instead:
 
-The rule is reversible and engine-aware. It does not force a rename when removing `_x` would recreate a current collision.
+```text
+sample.jpg exists
+sample__dup-1.jpg  -> sample_x01.jpg
+```
 
-The `_x` marker is therefore reserved for the Renamer's own conflict-resolution scheme. A filename ending in `_x` may still be preserved when the clean destination is occupied.
+### 7.5 Safety
+
+The rule is reversible and engine-aware. It never overwrites an existing destination and does not force a clean rename while that name is still occupied.
+
+The `_xNN` marker is reserved for the Renamer's own conflict-resolution scheme.
 
 ---
 
@@ -271,14 +283,6 @@ Furina_-test.jpg   -> Furina_-test.jpg
 ### 8.3 Safety
 
 A filename is not modified when its stem contains no alphanumeric character after the leading sequence.
-
-Therefore:
-
-```text
----.jpg -> --- .jpg
-```
-
-is conceptually **unchanged**; the actual stored filename remains exactly `---.jpg`.
 
 The rule must never generate an empty stem or an extension-only filename.
 
@@ -367,24 +371,26 @@ The Renamer Engine, not an individual rule, owns filesystem conflict handling.
 
 The engine must never overwrite an existing file.
 
-When a clean transformed destination is occupied, the engine automatically selects a free `_x` variant:
+When a clean transformed destination is occupied, the engine automatically selects a free `_xNN` variant:
 
 ```text
 sample.jpg       exists
-sample source    -> sample_x.jpg
+sample source    -> sample_x01.jpg
 ```
 
-For subsequent conflicts in the same namespace:
+If `_x01` is already occupied, the engine continues deterministically:
 
 ```text
 sample.jpg       exists
-sample_x.jpg     exists
-sample source    -> sample_x2.jpg
+sample_x01.jpg   exists
+sample source    -> sample_x02.jpg
 ```
 
-The `_x` suffix is deliberately reversible. The `remove_auto_conflict_suffix` rule removes it during planning, and conflict resolution restores it only when necessary.
+The generated suffix is always two-digit padded, starting at `_x01`.
 
-A file already carrying `_x`/`_x2` is not forcibly renamed while its clean destination remains occupied. This avoids oscillating names on repeated Renamer runs.
+The `_xNN` suffix is deliberately reversible. The `remove_auto_conflict_suffix` rule removes it during planning, and conflict resolution restores it only when necessary.
+
+Legacy conflict suffixes are migrated automatically to the new format rather than being preserved indefinitely.
 
 No operating-system-generated suffix such as `" (1)"` is used by the Renamer's conflict handler.
 
@@ -451,7 +457,8 @@ The rule definition system is compliant when:
 * filenames without matches remain unchanged;
 * unsafe empty/extension-only results are prevented;
 * conflict handling remains under DOC-203;
-* `_x` conflict markers can be removed when their clean destination becomes free;
+* `_xNN` conflict markers can be removed when their clean destination becomes free;
+* legacy `__dup-N` and older `_x` forms migrate to the current `_xNN` format when a conflict still exists;
 * adding a new rule does not require redesigning the engine.
 
 ---
