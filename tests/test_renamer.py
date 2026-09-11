@@ -66,7 +66,6 @@ def test_remove_duplicate_image_extension() -> None:
 def test_rules_are_applied_sequentially() -> None:
     engine = RenamerEngine()
     source = Path(r"M:\anime\example\  Furina (1)__.jpg.png")
-    # Use the rule pipeline without requiring a real file.
     name = source.name
     for rule in engine.rules:
         name = rule.apply(name)
@@ -123,7 +122,7 @@ def test_engine_removes_own_conflict_suffix_when_base_is_free(tmp_path: Path) ->
     assert proposals[0].destination == tmp_path / "sample.jpg"
 
 
-def test_engine_removes_legacy_conflict_suffix_when_base_is_free(tmp_path: Path) -> None:
+def test_engine_migrates_legacy_conflict_suffix_when_base_is_free(tmp_path: Path) -> None:
     source = tmp_path / "sample__dup-1.jpg"
     source.write_text("x", encoding="utf-8")
 
@@ -134,7 +133,7 @@ def test_engine_removes_legacy_conflict_suffix_when_base_is_free(tmp_path: Path)
     assert proposals[0].destination == tmp_path / "sample.jpg"
 
 
-def test_engine_reissues_new_conflict_suffix_when_base_is_occupied(tmp_path: Path) -> None:
+def test_engine_migrates_legacy_conflict_suffix_when_base_is_occupied(tmp_path: Path) -> None:
     base = tmp_path / "sample.jpg"
     source = tmp_path / "sample__dup-1.jpg"
     base.write_text("base", encoding="utf-8")
@@ -145,3 +144,15 @@ def test_engine_reissues_new_conflict_suffix_when_base_is_occupied(tmp_path: Pat
 
     assert len(proposals) == 1
     assert proposals[0].destination == tmp_path / "sample_x01.jpg"
+
+
+def test_engine_keeps_current_x01_stable_when_base_is_occupied(tmp_path: Path) -> None:
+    base = tmp_path / "sample.jpg"
+    source = tmp_path / "sample_x01.jpg"
+    base.write_text("base", encoding="utf-8")
+    source.write_text("x", encoding="utf-8")
+
+    engine = RenamerEngine()
+    proposals = engine.plan([source])
+
+    assert proposals == []
