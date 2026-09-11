@@ -13,6 +13,7 @@ DUPLICATE_IMAGE_EXTENSION_RE = re.compile(
     r"(?i)(\.(?:jpe?g|png|webp|gif|bmp|pns))$"
 )
 AUTO_CONFLICT_SUFFIX_RE = re.compile(r"(?i)_x(?:\d+)?$")
+LEGACY_CONFLICT_SUFFIX_RE = re.compile(r"(?i)__dup-(\d+)$")
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
 MAX_FILENAME_LENGTH = 255
 AUTO_CONFLICT_SUFFIX = "_x"
@@ -54,16 +55,17 @@ class RemoveDuplicateSuffixRule:
 
 @dataclass(frozen=True, slots=True)
 class RemoveAutoConflictSuffixRule:
-    """Remove the Renamer's own conflict suffix; conflicts are re-applied by the engine."""
+    """Remove current or legacy AI-Sorter conflict suffixes; conflicts are re-applied by the engine."""
 
     rule_id: str = "remove_auto_conflict_suffix"
-    version: str = "1.0"
+    version: str = "2.0"
 
     def apply(self, filename: str) -> str:
         path = Path(filename)
         stem = path.stem
         suffix = path.suffix
         transformed = AUTO_CONFLICT_SUFFIX_RE.sub("", stem)
+        transformed = LEGACY_CONFLICT_SUFFIX_RE.sub("", transformed)
         if not transformed:
             return filename
         return f"{transformed}{suffix}"
@@ -185,7 +187,7 @@ class RenamerEngine:
     def _conflict_name(destination: Path, index: int) -> Path:
         stem = destination.stem
         suffix = destination.suffix
-        tag = AUTO_CONFLICT_SUFFIX if index == 1 else f"{AUTO_CONFLICT_SUFFIX}{index}"
+        tag = f"_x{index:02d}"
         available_stem_length = max(1, MAX_FILENAME_LENGTH - len(suffix) - len(tag))
         trimmed_stem = stem[:available_stem_length]
         return destination.with_name(f"{trimmed_stem}{tag}{suffix}")
@@ -206,18 +208,12 @@ class RenamerEngine:
             )
 
             if conflict:
-                # A source carrying the Renamer's own _x suffix means that a
-                # previous run had already resolved this conflict. Keep it as-is
-                # while the clean destination remains occupied. If the clean
-                # destination becomes free, the rule above removes _x normally.
-                if AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem):
-                    continue
-
                 index = 1
                 while True:
                     candidate = self._conflict_name(destination, index)
                     candidate_key = self._path_key(candidate)
                     if candidate_key == source_key:
+                        index += 1
                         continue
                     if (
                         candidate_key not in used_destinations
