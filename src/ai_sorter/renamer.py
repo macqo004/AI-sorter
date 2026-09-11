@@ -208,11 +208,16 @@ class RenamerEngine:
             )
 
             if conflict:
+                is_current_conflict_suffix = bool(AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem))
                 index = 1
                 while True:
                     candidate = self._conflict_name(destination, index)
                     candidate_key = self._path_key(candidate)
                     if candidate_key == source_key:
+                        if is_current_conflict_suffix:
+                            destination = candidate
+                            destination_key = candidate_key
+                            break
                         index += 1
                         continue
                     if (
@@ -224,6 +229,8 @@ class RenamerEngine:
                         destination_key = candidate_key
                         break
                     index += 1
+                if destination_key == source_key and is_current_conflict_suffix:
+                    continue
                 reason = f"{proposal.reason}, auto-conflict-resolution"
                 proposal = RenameProposal(
                     proposal.source,
