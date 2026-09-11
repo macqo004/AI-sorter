@@ -133,7 +133,15 @@ class ScannerStore:
             raise DatabaseError("Nie udało się zapisać partii wyników skanowania w bazie danych.") from exc
 
     def update_renamed_locations(self, paths: list[tuple[Path, Path]]) -> int:
-        """Update DB paths after successful filesystem renames, preserving SHA-512 identity."""
+        """Update DB paths after successful filesystem renames, preserving SHA-512 identity.
+
+        A destination collision in the DB can be a stale historical row even when the
+        destination path is currently occupied by the just-renamed filesystem object.
+        The filesystem state has already been validated by the Renamer, so the stale
+        destination location is removed before the source location is moved there.
+        If the destination row already belongs to the same SHA-512, the two location
+        rows are merged by removing the duplicate destination row.
+        """
         if not paths:
             return 0
         try:
@@ -148,13 +156,27 @@ class ScannerStore:
                     ).fetchone()
                     if row is None:
                         continue
+                    source_sha = str(row["sha512"]).lower()
                     collision = connection.execute(
-                        "SELECT 1 FROM file_location WHERE absolute_path = ?",
+                        "SELECT sha512, location_status FROM file_location WHERE absolute_path = ?",
                         (destination_text,),
                     ).fetchone()
                     if collision is not None:
-                        raise DatabaseError(
-                            f"Nie można zaktualizować ścieżki w bazie — miejsce docelowe już istnieje w bazie: {destination_text}"
+                        collision_sha = str(collision["sha512"]).lower()
+                        if collision_sha == source_sha:
+                            connection.execute(
+                                "DELETE FROM file_location WHERE absolute_path = ?",
+                                (source_text,),
+                            )
+                            connection.execute(
+                                "UPDATE file_location SET location_status = 'ACTIVE' WHERE absolute_path = ?",
+                                (destination_text,),
+                            )
+                            updated += 1
+                            continue
+                        connection.execute(
+                            "DELETE FROM file_location WHERE absolute_path = ?",
+                            (destination_text,),
                         )
                     connection.execute(
                         "UPDATE file_location SET absolute_path = ?, location_status = 'ACTIVE' WHERE absolute_path = ?",
