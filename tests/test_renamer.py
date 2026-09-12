@@ -19,6 +19,8 @@ def test_remove_duplicate_suffix() -> None:
     assert rule.apply("furina (1).jpg") == "furina.jpg"
     assert rule.apply("furina [25].png") == "furina.png"
     assert rule.apply("furina {3}.webp") == "furina.webp"
+    assert rule.apply("4 (2) (1).jpg") == "4.jpg"
+    assert rule.apply("4 (2) (1) [3].jpg") == "4.jpg"
     assert rule.apply("furina.jpg") == "furina.jpg"
 
 
