@@ -16,6 +16,7 @@ class RenamerWorker(QObject):
     """Run Renamer planning/execution on a worker thread."""
 
     planned = Signal(object)
+    progress = Signal(int, int, str)
     finished = Signal(object)
     failed = Signal(str)
 
@@ -46,6 +47,48 @@ class RenamerWorker(QObject):
             )
         except Exception as exc:
             self.failed.emit(f"Nie udało się przygotować planu Renamera: {exc}")
+
+    def _execute_with_progress(self) -> list[RenameProposal]:
+        """Execute the already validated rename plan while reporting completed renames."""
+        proposals = [proposal for proposal in self.proposals if proposal.changed]
+        self.engine._validate_plan(proposals)
+        total = len(proposals)
+        for proposal in proposals:
+            if not proposal.source.exists():
+                raise FileNotFoundError(
+                    f"Rename refused because source disappeared: {proposal.source}"
+                )
+
+        executed: list[RenameProposal] = []
+        temporary: list[tuple[Path, Path, RenameProposal]] = []
+        self.progress.emit(0, total, "Renamer — preparing files…")
+        try:
+            for index, proposal in enumerate(proposals):
+                temporary_path = self.engine._temporary_path(proposal.source, index)
+                if temporary_path.exists():
+                    raise FileExistsError(
+                        f"Temporary rename path already exists: {temporary_path}"
+                    )
+                proposal.source.rename(temporary_path)
+                temporary.append((temporary_path, proposal.destination, proposal))
+
+            for completed, (temporary_path, destination, proposal) in enumerate(temporary, start=1):
+                temporary_path.rename(destination)
+                executed.append(proposal)
+                self.progress.emit(
+                    completed,
+                    total,
+                    f"Renamer — {completed:,} / {total:,}: {destination.name}",
+                )
+        except Exception:
+            for temporary_path, destination, proposal in reversed(temporary):
+                try:
+                    if temporary_path.exists() and not proposal.source.exists():
+                        temporary_path.rename(proposal.source)
+                except OSError:
+                    pass
+            raise
+        return executed
 
     def _reconcile_database_after_rename(
         self, paths: list[tuple[Path, Path]]
@@ -88,8 +131,6 @@ class RenamerWorker(QObject):
                         )
                     source_sha = next(iter(source_shas))
                 elif destination_rows:
-                    # The DB may already have been reconciled by a previous retry.
-                    # Do not create another location row in that case.
                     destination_shas = {str(row["sha512"]).lower() for row in destination_rows}
                     if len(destination_shas) == 1:
                         updated += 1
@@ -139,7 +180,7 @@ class RenamerWorker(QObject):
     def execute(self) -> None:
         try:
             started_at = time.perf_counter()
-            executed = self.engine.execute(self.proposals)
+            executed = self._execute_with_progress()
             db_updated, db_reconciled_conflicts = self._reconcile_database_after_rename(
                 [(proposal.source, proposal.destination) for proposal in executed]
             )
