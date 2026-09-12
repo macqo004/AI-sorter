@@ -69,6 +69,7 @@ class MainWindow(BaseMainWindow):
         self.renamer_worker.moveToThread(self.renamer_thread)
         self.renamer_thread.started.connect(self.renamer_worker.plan)
         self.renamer_worker.planned.connect(self.on_renamer_planned)
+        self.renamer_worker.progress.connect(self.on_renamer_progress)
         self.renamer_worker.finished.connect(self.on_renamer_finished)
         self.renamer_worker.failed.connect(self.on_renamer_failed)
         self.renamer_worker.finished.connect(self.renamer_thread.quit)
@@ -119,10 +120,11 @@ class MainWindow(BaseMainWindow):
             self._set_progress(0, changed, "Renamer")
             self.progress.setFormat(f"Renaming 0 / {changed:,}")
             self.scan_details.setText(
-                f"Renamer\nRenaming {changed:,} files…\n"
-                f"Folder: {data['root']}"
+                f"Renamer\nRenaming 0 / {changed:,}\n"
+                f"Folder: {data['root']}\nElapsed: 00:00:00"
             )
-            self.statusBar().showMessage(f"Renamer is renaming {changed:,} files…")
+            self.statusBar().showMessage(f"Renamer is renaming 0 / {changed:,} files…")
+            self.elapsed_timer.start()
             self.renamer_apply_requested.emit()
         else:
             self.elapsed_timer.stop()
@@ -132,6 +134,18 @@ class MainWindow(BaseMainWindow):
             self.statusBar().showMessage("Renamer cancelled before applying changes.")
             if self.renamer_thread:
                 self.renamer_thread.quit()
+
+    def on_renamer_progress(self, current: int, total: int, message: str) -> None:
+        self._set_progress(current, total, "Renamer")
+        elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
+        self.progress.setFormat(f"Renaming {current:,} / {total:,}")
+        self.scan_details.setText(
+            f"Renamer\n{message}\n"
+            f"Elapsed: {self._format_duration(elapsed)}"
+        )
+        self.statusBar().showMessage(
+            f"Renamer — {current:,} / {total:,} ({(current / total * 100.0) if total else 100.0:.2f}%)"
+        )
 
     def on_renamer_finished(self, result: object) -> None:
         data = dict(result)
