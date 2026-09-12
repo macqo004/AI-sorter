@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from ..core.scanner_store import ScannerStore
 from ..core.database import DatabaseError
-from ..renamer import RenameProposal, RenamerEngine, iter_files
+from ..renamer import RenameProposal, RenamerEngine
+from ..core.scanner_store import ScannerStore
 
 
 class RenamerWorker(QObject):
@@ -20,6 +21,10 @@ class RenamerWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
 
+    SUPPORTED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
+    PROGRESS_INTERVAL = 500
+    PROGRESS_TIME_SECONDS = 0.15
+
     def __init__(self, database, root: Path, recursive: bool = True) -> None:
         super().__init__()
         self.database = database
@@ -28,13 +33,50 @@ class RenamerWorker(QObject):
         self.engine = RenamerEngine()
         self.proposals: list[RenameProposal] = []
 
+    def _discover_files(self) -> list[Path]:
+        """Collect supported files while keeping the GUI visibly alive."""
+        root = self.root.resolve()
+        if not root.is_dir():
+            raise NotADirectoryError(f"Not a directory: {root}")
+
+        discovered: list[Path] = []
+        last_emit = time.perf_counter()
+        for current, directories, filenames in os.walk(root):
+            directories.sort(key=str.casefold)
+            filenames.sort(key=str.casefold)
+            current_path = Path(current)
+            for filename in filenames:
+                if Path(filename).suffix.lower() not in self.SUPPORTED_EXTENSIONS:
+                    continue
+                discovered.append(current_path / filename)
+                now = time.perf_counter()
+                if (
+                    len(discovered) % self.PROGRESS_INTERVAL == 0
+                    or now - last_emit >= self.PROGRESS_TIME_SECONDS
+                ):
+                    self.progress.emit(
+                        len(discovered),
+                        0,
+                        f"Renamer — discovering files: {len(discovered):,}",
+                    )
+                    last_emit = now
+
+        discovered.sort(key=lambda path: str(path).casefold())
+        self.progress.emit(
+            len(discovered),
+            0,
+            f"Renamer — discovery complete: {len(discovered):,} files",
+        )
+        return discovered
+
     @Slot()
     def plan(self) -> None:
         try:
-            files = iter_files(self.root, recursive=self.recursive)
+            files = self._discover_files()
             scanned = len(files)
             proposals: list[RenameProposal] = []
             skipped_missing: list[str] = []
+            last_emit = time.perf_counter()
 
             self.progress.emit(0, scanned, "Renamer — planning…")
             for index, source in enumerate(files, start=1):
@@ -49,7 +91,14 @@ class RenamerWorker(QObject):
                         f"Renamer — planning {index:,} / {scanned:,}: "
                         f"skipped missing file: {source.name}"
                     )
-                self.progress.emit(index, scanned, message)
+                now = time.perf_counter()
+                if (
+                    index == scanned
+                    or index % self.PROGRESS_INTERVAL == 0
+                    or now - last_emit >= self.PROGRESS_TIME_SECONDS
+                ):
+                    self.progress.emit(index, scanned, message)
+                    last_emit = now
 
             self.proposals = self.engine._resolve_conflicts(proposals)
             self.planned.emit(
@@ -114,14 +163,7 @@ class RenamerWorker(QObject):
     def _reconcile_database_after_rename(
         self, paths: list[tuple[Path, Path]]
     ) -> tuple[int, int]:
-        """Synchronize DB paths after the filesystem rename.
-
-        A successful filesystem rename is authoritative here. If the destination
-        already has stale DB rows for another SHA-512, those rows are removed so
-        the renamed file can take ownership of the destination path. If the
-        destination already belongs to the same SHA-512, the source location is
-        merged into the existing destination location instead of failing.
-        """
+        """Synchronize DB paths after the filesystem rename."""
         if not paths:
             return 0, 0
         database = self.database
