@@ -60,7 +60,7 @@ class MainWindow(BaseMainWindow):
         self.progress.setFormat("Planning…")
         self.scan_details.setText(
             f"Renamer\nPlanning filename changes for:\n{root}\n\n"
-            "Rules: remove numeric duplicate suffixes; remove leading non-alphanumeric characters."
+            "Rules: deterministic filename cleanup and conflict resolution."
         )
         self.statusBar().showMessage("Renamer is preparing a rename plan…")
 
@@ -79,18 +79,27 @@ class MainWindow(BaseMainWindow):
         self.renamer_thread.start()
 
     def on_renamer_progress(self, current: int, total: int, message: str) -> None:
-        self._set_progress(current, total, "Renamer")
         elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
+        if total <= 0:
+            # Discovery has no known final total yet. Use an indeterminate bar so
+            # the GUI visibly proves that the worker is still alive.
+            self.progress.setRange(0, 0)
+            self.progress.setFormat(f"{message}  |  Elapsed: {self._format_duration(elapsed)}")
+            self.scan_details.setText(
+                f"Renamer\n{message}\n"
+                f"Elapsed: {self._format_duration(elapsed)}"
+            )
+            self.statusBar().showMessage(message)
+            return
+
+        self._set_progress(current, total, "Renamer")
         if "planning" in message.lower() or "skipped missing file" in message.lower():
-            self.progress.setFormat(f"Planning {current:,} / {total:,}")
+            self.progress.setFormat(f"Planning {current:,} / {total:,} ({(current / total * 100.0):.2f}%)")
         else:
-            self.progress.setFormat(f"Renaming {current:,} / {total:,}")
+            self.progress.setFormat(f"Renaming {current:,} / {total:,} ({(current / total * 100.0):.2f}%)")
         self.scan_details.setText(
             f"Renamer\n{message}\n"
             f"Elapsed: {self._format_duration(elapsed)}"
-        )
-        self.statusBar().showMessage(
-            f"{message} ({(current / total * 100.0) if total else 100.0:.2f}%)"
         )
 
     def on_renamer_planned(self, result: object) -> None:
