@@ -1,0 +1,1 @@
+Renamer confirmation dialog is resizable; see src/ai_sorter/gui/renamer_window.py
