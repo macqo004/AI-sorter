@@ -133,15 +133,7 @@ class ScannerStore:
             raise DatabaseError("Nie udało się zapisać partii wyników skanowania w bazie danych.") from exc
 
     def update_renamed_locations(self, paths: list[tuple[Path, Path]]) -> int:
-        """Update DB paths after successful filesystem renames, preserving SHA-512 identity.
-
-        A destination collision in the DB can be a stale historical row even when the
-        destination path is currently occupied by the just-renamed filesystem object.
-        The filesystem state has already been validated by the Renamer, so the stale
-        destination location is removed before the source location is moved there.
-        If the destination row already belongs to the same SHA-512, the two location
-        rows are merged by removing the duplicate destination row.
-        """
+        """Update DB paths after successful filesystem renames, preserving SHA-512 identity."""
         if not paths:
             return 0
         try:
@@ -189,7 +181,13 @@ class ScannerStore:
         except Exception as exc:
             raise DatabaseError("Nie udało się zaktualizować ścieżek Renamera w bazie danych.") from exc
 
-    def mark_missing_under_root(self, root: Path) -> int:
+    def mark_missing_under_root(self, root: Path, execution_id: int) -> int:
+        """Mark active locations not seen during this scan as missing under *root*.
+
+        Every location observed during the current scan already receives this execution_id,
+        so the final reconciliation does not need a large NOT IN comparison against a
+        temporary path table.
+        """
         root_text = str(root.resolve()).rstrip("\\/")
         pattern = root_text + "\\%"
         try:
@@ -200,11 +198,11 @@ class ScannerStore:
                     SET location_status = 'MISSING'
                     WHERE location_status = 'ACTIVE'
                       AND (absolute_path = ? OR absolute_path LIKE ?)
-                      AND absolute_path NOT IN (SELECT absolute_path FROM scanner_seen_paths)
+                      AND (last_seen_execution_id IS NULL OR last_seen_execution_id <> ?)
                     """,
-                    (root_text, pattern),
+                    (root_text, pattern, execution_id),
                 )
-                return max(0, cursor.rowcount)
+                return max(0, cursor.rowcount or 0)
         except Exception as exc:
             raise DatabaseError("Nie udało się ustalić, które lokalizacje plików są już niedostępne.") from exc
 
