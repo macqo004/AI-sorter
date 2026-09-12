@@ -9,6 +9,7 @@ from ai_sorter.renamer import (
     RemoveDuplicateImageExtensionRule,
     RemoveDuplicateSuffixRule,
     RemoveLeadingNonAlphanumericRule,
+    RemoveLeadingSingleCharUnderscoreRule,
     RemoveTrailingNonAlphanumericRule,
     RenamerEngine,
 )
@@ -34,6 +35,16 @@ def test_remove_auto_conflict_suffix() -> None:
     assert rule.apply("sample__dup-25.jpg") == "sample.jpg"
     assert rule.apply("sample_xx.jpg") == "sample_xx.jpg"
     assert rule.apply("sample.jpg") == "sample.jpg"
+
+
+def test_remove_leading_single_char_underscore() -> None:
+    rule = RemoveLeadingSingleCharUnderscoreRule()
+    assert rule.apply("a_fabjnfalfjan.jpg") == "fabjnfalfjan.jpg"
+    assert rule.apply("Z_image.png") == "image.png"
+    assert rule.apply("1_image.webp") == "image.webp"
+    assert rule.apply("ab_image.jpg") == "ab_image.jpg"
+    assert rule.apply("_image.jpg") == "_image.jpg"
+    assert rule.apply("a__image.jpg") == "_image.jpg"
 
 
 def test_remove_leading_non_alphanumeric() -> None:
