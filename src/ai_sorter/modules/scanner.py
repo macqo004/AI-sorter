@@ -69,6 +69,8 @@ class Scanner:
 
     module_id = "scanner"
     module_version = "0.4.1"
+    _PROGRESS_MIN_INTERVAL = 0.20
+    _PROGRESS_MIN_ITEMS = 250
 
     def __init__(
         self,
@@ -118,6 +120,8 @@ class Scanner:
         touch_batch: list[tuple[str, int, datetime]] = []
         current_discovery_path: str | None = None
         last_completed_path: str | None = None
+        last_emit_at = 0.0
+        last_emit_processed = -self._PROGRESS_MIN_ITEMS
 
         def flush_batches() -> None:
             nonlocal database_seconds
@@ -133,9 +137,15 @@ class Scanner:
                 database_seconds += time.perf_counter() - db_start
                 touch_batch.clear()
 
-        def emit() -> None:
+        def emit(force: bool = False) -> None:
+            nonlocal last_emit_at, last_emit_processed
+            now = time.perf_counter()
+            if not force and (now - last_emit_at) < self._PROGRESS_MIN_INTERVAL and (processed - last_emit_processed) < self._PROGRESS_MIN_ITEMS:
+                return
             self._emit(progress_callback, discovered, processed, scanned, saved, skipped, failed,
                        discovered, current_discovery_path, last_completed_path)
+            last_emit_at = now
+            last_emit_processed = processed
 
         def persist_completed(done: set[Future[_HashedFile]]) -> None:
             nonlocal processed, scanned, saved, failed, hash_seconds, last_completed_path
@@ -217,6 +227,7 @@ class Scanner:
         finally:
             self._executor = None
             flush_batches()
+            emit(force=True)
             self.database.finish_module_execution(ModuleExecutionRecord(
                 execution_id, self.module_id, started_at, status,
                 processed, saved + skipped, failed
@@ -242,12 +253,10 @@ class Scanner:
                             continue
                         if not entry.is_file(follow_symlinks=False):
                             continue
-                        path = Path(entry.path).resolve()
+                        path = Path(entry.path).absolute()
                         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                             continue
                         stat = entry.stat(follow_symlinks=False)
-                        # Match the local date/time and whole-second precision displayed
-                        # by Windows Explorer in file Properties.
                         modified_at = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0)
                         yield _FileCandidate(path, stat.st_size, modified_at)
                     except OSError:
