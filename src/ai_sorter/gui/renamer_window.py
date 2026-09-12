@@ -78,11 +78,27 @@ class MainWindow(BaseMainWindow):
         self.renamer_apply_requested.connect(self.renamer_worker.execute)
         self.renamer_thread.start()
 
+    def on_renamer_progress(self, current: int, total: int, message: str) -> None:
+        self._set_progress(current, total, "Renamer")
+        elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
+        if "planning" in message.lower() or "skipped missing file" in message.lower():
+            self.progress.setFormat(f"Planning {current:,} / {total:,}")
+        else:
+            self.progress.setFormat(f"Renaming {current:,} / {total:,}")
+        self.scan_details.setText(
+            f"Renamer\n{message}\n"
+            f"Elapsed: {self._format_duration(elapsed)}"
+        )
+        self.statusBar().showMessage(
+            f"{message} ({(current / total * 100.0) if total else 100.0:.2f}%)"
+        )
+
     def on_renamer_planned(self, result: object) -> None:
         data = dict(result)
         scanned = int(data["scanned"])
         changed = int(data["changed"])
         unchanged = int(data["unchanged"])
+        skipped_missing = int(data.get("skipped_missing", 0))
         preview = list(data["preview"])
 
         elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
@@ -91,7 +107,8 @@ class MainWindow(BaseMainWindow):
             f"Folder: {data['root']}\n"
             f"Przeskanowano: {scanned:,}\n"
             f"Do zmiany: {changed:,}\n"
-            f"Bez zmian: {unchanged:,}\n\n"
+            f"Bez zmian: {unchanged:,}\n"
+            f"Pominięto — plik usunięty podczas planowania: {skipped_missing:,}\n\n"
             f"Czas przygotowania: {self._format_duration(elapsed)}\n\n"
             "Zmiany nie zostały jeszcze wykonane."
         )
@@ -134,18 +151,6 @@ class MainWindow(BaseMainWindow):
             self.statusBar().showMessage("Renamer cancelled before applying changes.")
             if self.renamer_thread:
                 self.renamer_thread.quit()
-
-    def on_renamer_progress(self, current: int, total: int, message: str) -> None:
-        self._set_progress(current, total, "Renamer")
-        elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
-        self.progress.setFormat(f"Renaming {current:,} / {total:,}")
-        self.scan_details.setText(
-            f"Renamer\n{message}\n"
-            f"Elapsed: {self._format_duration(elapsed)}"
-        )
-        self.statusBar().showMessage(
-            f"Renamer — {current:,} / {total:,} ({(current / total * 100.0) if total else 100.0:.2f}%)"
-        )
 
     def on_renamer_finished(self, result: object) -> None:
         data = dict(result)
