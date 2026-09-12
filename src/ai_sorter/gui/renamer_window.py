@@ -9,6 +9,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from .main_window_simimages import MainWindow as BaseMainWindow
+from .renamer_confirm_dialog import RenamerConfirmDialog
 from .renamer_worker_fixed import RenamerWorker
 
 
@@ -112,15 +113,9 @@ class MainWindow(BaseMainWindow):
         ]
         if len(preview) > preview_limit:
             preview_lines.append(f"… i {len(preview) - preview_limit:,} kolejnych zmian")
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Renamer — zatwierdzenie")
-        dialog.setText(summary + "\n\nCzy wykonać te zmiany?")
-        dialog.setDetailedText("\n".join(preview_lines))
-        yes_button = dialog.addButton("Wykonaj zmiany", QMessageBox.AcceptRole)
-        dialog.addButton("Anuluj", QMessageBox.RejectRole)
-        dialog.exec()
 
-        if dialog.clickedButton() is yes_button:
+        dialog = RenamerConfirmDialog(summary, preview_lines, self)
+        if dialog.exec() == dialog.Accepted:
             self._set_progress(0, changed, "Renamer")
             self.progress.setFormat(f"Renaming 0 / {changed:,}")
             self.scan_details.setText(
