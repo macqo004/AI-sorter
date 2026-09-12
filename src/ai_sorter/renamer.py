@@ -38,16 +38,21 @@ class FilenameRule(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class RemoveDuplicateSuffixRule:
-    """Remove explicit numeric copy suffixes from the filename stem."""
+    """Remove the complete chain of explicit numeric copy suffixes from the filename stem."""
 
     rule_id: str = "remove_duplicate_suffix"
-    version: str = "1.0"
+    version: str = "1.1"
 
     def apply(self, filename: str) -> str:
         path = Path(filename)
         stem = path.stem
         suffix = path.suffix
-        transformed = DUPLICATE_SUFFIX_RE.sub("", stem)
+        transformed = stem
+        while True:
+            next_stem = DUPLICATE_SUFFIX_RE.sub("", transformed)
+            if next_stem == transformed:
+                break
+            transformed = next_stem
         if not transformed:
             return filename
         return f"{transformed}{suffix}"
