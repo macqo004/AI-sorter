@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QDialog, QThread, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from .main_window_simimages import MainWindow as BaseMainWindow
@@ -115,7 +115,7 @@ class MainWindow(BaseMainWindow):
             preview_lines.append(f"… i {len(preview) - preview_limit:,} kolejnych zmian")
 
         dialog = RenamerConfirmDialog(summary, preview_lines, self)
-        if dialog.exec() == dialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             self._set_progress(0, changed, "Renamer")
             self.progress.setFormat(f"Renaming 0 / {changed:,}")
             self.scan_details.setText(
