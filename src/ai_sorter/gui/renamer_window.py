@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QDialog, QThread, Signal
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 
 from .main_window_simimages import MainWindow as BaseMainWindow
 from .renamer_confirm_dialog import RenamerConfirmDialog
