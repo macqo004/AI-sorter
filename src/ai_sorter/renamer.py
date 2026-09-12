@@ -143,6 +143,9 @@ DEFAULT_RULES: tuple[FilenameRule, ...] = (
 class RenamerEngine:
     """Plan and safely execute deterministic filename transformations."""
 
+    TEMP_PREFIX = ".asrtmp_"
+    TEMP_SUFFIX = ".tmp"
+
     def __init__(self, rules: Iterable[FilenameRule] = DEFAULT_RULES) -> None:
         self.rules = tuple(rules)
         rule_ids = [rule.rule_id for rule in self.rules]
@@ -267,6 +270,11 @@ class RenamerEngine:
                     f"Rename refused because destination already exists: {proposal.destination}"
                 )
 
+    @classmethod
+    def _temporary_path(cls, source: Path, index: int) -> Path:
+        """Build a deliberately short same-directory temp name for Windows path-length safety."""
+        return source.with_name(f"{cls.TEMP_PREFIX}{index:06d}{cls.TEMP_SUFFIX}")
+
     def execute(self, proposals: Iterable[RenameProposal]) -> list[RenameProposal]:
         proposals = [proposal for proposal in proposals if proposal.changed]
         self._validate_plan(proposals)
@@ -278,9 +286,7 @@ class RenamerEngine:
         temporary: list[tuple[Path, Path, RenameProposal]] = []
         try:
             for index, proposal in enumerate(proposals):
-                temporary_path = proposal.source.with_name(
-                    f".{proposal.source.name}.ai-sorter-rename-{index}.tmp"
-                )
+                temporary_path = self._temporary_path(proposal.source, index)
                 if temporary_path.exists():
                     raise FileExistsError(
                         f"Temporary rename path already exists: {temporary_path}"
