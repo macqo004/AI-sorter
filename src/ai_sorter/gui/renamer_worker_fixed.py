@@ -69,6 +69,29 @@ class RenamerWorker(QObject):
         )
         return discovered
 
+    def _propose_without_filesystem_check(self, source: Path) -> RenameProposal | None:
+        """Apply rename rules without a filesystem stat; discovery already found the file."""
+        source = source.absolute()
+        current_name = source.name
+        transformed_name = current_name
+        applied_rules: list[str] = []
+        for rule in self.engine.rules:
+            next_name = rule.apply(transformed_name)
+            if next_name != transformed_name:
+                transformed_name = next_name
+                applied_rules.append(f"{rule.rule_id}@{rule.version}")
+
+        if transformed_name == current_name:
+            return RenameProposal(source, source, "", False, "No rule matched")
+
+        if not source.is_file():
+            raise FileNotFoundError(f"Source file does not exist: {source}")
+
+        destination = source.with_name(transformed_name)
+        reason = ", ".join(applied_rules)
+        rule_id = "+".join(applied_rules)
+        return RenameProposal(source, destination, rule_id, True, reason)
+
     @Slot()
     def plan(self) -> None:
         try:
@@ -81,7 +104,7 @@ class RenamerWorker(QObject):
             self.progress.emit(0, scanned, "Renamer — planning…")
             for index, source in enumerate(files, start=1):
                 try:
-                    proposal = self.engine.propose(source)
+                    proposal = self._propose_without_filesystem_check(source)
                     if proposal is not None and proposal.changed:
                         proposals.append(proposal)
                     message = f"Renamer — planning {index:,} / {scanned:,}: {source.name}"
