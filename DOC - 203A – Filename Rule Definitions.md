@@ -8,7 +8,7 @@
 
 **Module:** File Renamer – Rule Definitions
 
-**Version:** 2.3
+**Version:** 2.4
 
 **Status:** Draft
 
@@ -78,7 +78,7 @@ The output of one rule becomes the input to the next rule.
 Current built-in ordering:
 
 ```text
-1. remove_duplicate_suffix@1.0
+1. remove_duplicate_suffix@1.1
 2. remove_auto_conflict_suffix@2.0
 3. remove_leading_non_alphanumeric@1.0
 4. remove_trailing_non_alphanumeric@1.0
@@ -110,13 +110,13 @@ USER_DEFINED
 
 **Rule ID:** `remove_duplicate_suffix`
 
-**Version:** `1.0`
+**Version:** `1.1`
 
 **Category:** `DUPLICATE_REMOVAL`
 
 ### 6.1 Purpose
 
-Remove an explicit numeric copy suffix from the end of the filename stem.
+Remove the complete chain of explicit numeric copy suffixes from the end of the filename stem.
 
 ### 6.2 Accepted patterns
 
@@ -129,13 +129,17 @@ Remove an explicit numeric copy suffix from the end of the filename stem.
 
 Optional whitespace directly before the bracketed suffix is part of the removable pattern.
 
+The rule repeats until no further matching suffix remains. This prevents partially cleaned chains such as `4 (2) (1).jpg` from becoming `4 (2.jpg`.
+
 ### 6.3 Examples
 
 ```text
-furina (1).jpg      -> furina.jpg
-furina [25].png     -> furina.png
-furina {3}.webp     -> furina.webp
-furina.jpg          -> furina.jpg
+furina (1).jpg          -> furina.jpg
+furina [25].png         -> furina.png
+furina {3}.webp         -> furina.webp
+4 (2) (1).jpg           -> 4.jpg
+4 (2) (1) [3].jpg       -> 4.jpg
+furina.jpg              -> furina.jpg
 ```
 
 ### 6.4 Explicit exclusions
@@ -152,7 +156,7 @@ It does not treat values such as `_1280_720` as duplicate suffixes.
 
 ### 6.5 Safety
 
-If removing the suffix would leave an empty stem, the original filename is preserved.
+If removing the suffix chain would leave an empty stem, the original filename is preserved.
 
 ---
 
@@ -327,7 +331,7 @@ If removing the trailing sequence would leave an empty stem, the original filena
 
 ### 10.1 Purpose
 
-Remove one repeated, known image extension immediately before the final image extension.
+Remove a repeated, known image extension immediately before the final image extension.
 
 ### 10.2 Recognised image extensions
 
@@ -454,6 +458,7 @@ The rule definition system is compliant when:
 * rules are deterministic;
 * rules are applied sequentially;
 * the five current built-in rules behave exactly as specified above;
+* chained duplicate suffixes are fully removed, not just one suffix at a time;
 * filenames without matches remain unchanged;
 * unsafe empty/extension-only results are prevented;
 * conflict handling remains under DOC-203;
