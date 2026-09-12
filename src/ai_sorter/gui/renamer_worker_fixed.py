@@ -32,13 +32,34 @@ class RenamerWorker(QObject):
     def plan(self) -> None:
         try:
             files = iter_files(self.root, recursive=self.recursive)
-            self.proposals = self.engine.plan(files)
+            scanned = len(files)
+            proposals: list[RenameProposal] = []
+            skipped_missing: list[str] = []
+
+            self.progress.emit(0, scanned, "Renamer — planning…")
+            for index, source in enumerate(files, start=1):
+                try:
+                    proposal = self.engine.propose(source)
+                    if proposal is not None and proposal.changed:
+                        proposals.append(proposal)
+                    message = f"Renamer — planning {index:,} / {scanned:,}: {source.name}"
+                except FileNotFoundError:
+                    skipped_missing.append(str(source))
+                    message = (
+                        f"Renamer — planning {index:,} / {scanned:,}: "
+                        f"skipped missing file: {source.name}"
+                    )
+                self.progress.emit(index, scanned, message)
+
+            self.proposals = self.engine._resolve_conflicts(proposals)
             self.planned.emit(
                 {
                     "root": str(self.root),
-                    "scanned": len(files),
+                    "scanned": scanned,
                     "changed": len(self.proposals),
-                    "unchanged": len(files) - len(self.proposals),
+                    "unchanged": scanned - len(self.proposals) - len(skipped_missing),
+                    "skipped_missing": len(skipped_missing),
+                    "skipped_missing_paths": skipped_missing,
                     "preview": [
                         (str(p.source), str(p.destination), p.reason)
                         for p in self.proposals
