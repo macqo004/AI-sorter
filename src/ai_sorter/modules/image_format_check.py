@@ -1,6 +1,7 @@
 """Cheap detection of an image's real format versus its filename extension."""
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -9,8 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
-
-from PIL import Image
 
 from ..core.database import Database, DatabaseError
 from ..core.models import ModuleExecutionRecord, ModuleRecord
@@ -68,6 +67,7 @@ class _Target:
 @dataclass(frozen=True, slots=True)
 class _Result:
     sha512: str
+    result_key: str
     extension: str
     detected_format: str
     mime_type: str | None
@@ -75,17 +75,21 @@ class _Result:
 
 
 class ImageFormatCheck:
-    """Compare declared image extensions with the format reported by Pillow."""
+    """Compare declared image extensions with the real on-disk format.
+
+    The detector reads only a tiny file signature; it does not decode the image
+    and does not calculate SHA-512.
+    """
 
     module_id = "image_format_check"
-    module_version = "0.1.0"
-    result_key = "image_format_check"
+    module_version = "0.1.1"
+    result_key_prefix = "image_format_check:"
 
-    def __init__(self, database: Database, root: Path | None = None, worker_count: int = 0, batch_size: int = 256) -> None:
+    def __init__(self, database: Database, root: Path | None = None, worker_count: int = 0, batch_size: int = 512) -> None:
         self.database = database
         self.root = root.resolve() if root is not None else None
-        self.worker_count = worker_count or max(1, min(8, (os.cpu_count() or 4) // 2 or 1))
-        self.batch_size = max(32, batch_size)
+        self.worker_count = worker_count or max(1, min(12, (os.cpu_count() or 4)))
+        self.batch_size = max(64, batch_size)
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -104,10 +108,19 @@ class ImageFormatCheck:
         status = "FAILED"
         pending: dict[Future[_Result], _Target] = {}
         result_batch: list[_Result] = []
+        last_emit = 0.0
+        last_emit_count = 0
 
-        def emit(path: str | None = None) -> None:
-            if progress_callback:
-                progress_callback(FormatProgress(considered, processed, matches, mismatches, failed, total, path))
+        def emit(path: str | None = None, *, force: bool = False) -> None:
+            nonlocal last_emit, last_emit_count
+            if progress_callback is None:
+                return
+            now = time.monotonic()
+            if not force and processed - last_emit_count < 250 and now - last_emit < 0.2:
+                return
+            last_emit = now
+            last_emit_count = processed
+            progress_callback(FormatProgress(considered, processed, matches, mismatches, failed, total, path))
 
         try:
             with ThreadPoolExecutor(max_workers=self.worker_count, thread_name_prefix="format-check") as executor:
@@ -117,20 +130,16 @@ class ImageFormatCheck:
                         cancelled = True
                         break
                     pending[executor.submit(self._detect, target)] = target
-                    if len(pending) >= self.worker_count * 4:
+                    if len(pending) >= self.worker_count * 8:
                         done, _ = wait(pending, return_when=FIRST_COMPLETED)
                         for future in done:
                             item = pending.pop(future)
+                            self._consume_result(future, item, result_batch)
                             processed += 1
-                            try:
-                                result = future.result()
-                                result_batch.append(result)
-                                if result.matches:
-                                    matches += 1
-                                else:
-                                    mismatches += 1
-                            except Exception:
-                                failed += 1
+                            if result_batch[-1].matches:
+                                matches += 1
+                            else:
+                                mismatches += 1
                             emit(str(item.path))
                         if len(result_batch) >= self.batch_size:
                             self._persist_batch(result_batch, execution_id)
@@ -140,15 +149,17 @@ class ImageFormatCheck:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
                     for future in done:
                         item = pending.pop(future)
-                        processed += 1
+                        before = len(result_batch)
                         try:
                             result = future.result()
                             result_batch.append(result)
+                            processed += 1
                             if result.matches:
                                 matches += 1
                             else:
                                 mismatches += 1
                         except Exception:
+                            processed += 1
                             failed += 1
                         emit(str(item.path))
                     if len(result_batch) >= self.batch_size:
@@ -157,9 +168,11 @@ class ImageFormatCheck:
 
                 if result_batch:
                     self._persist_batch(result_batch, execution_id)
+                    result_batch.clear()
 
             cancelled = cancelled or self._cancel_event.is_set()
             status = "CANCELLED" if cancelled else ("COMPLETED_WITH_WARNINGS" if failed else "COMPLETED")
+            emit(None, force=True)
         except DatabaseError:
             status = "FAILED"
             raise
@@ -169,6 +182,13 @@ class ImageFormatCheck:
             )
 
         return FormatSummary(execution_id, considered, processed, matches, mismatches, failed, cancelled, time.perf_counter() - started_perf)
+
+    @staticmethod
+    def _consume_result(future: Future[_Result], item: _Target, result_batch: list[_Result]) -> None:
+        try:
+            result_batch.append(future.result())
+        except Exception:
+            raise
 
     def _root_filter(self) -> tuple[str, str] | None:
         if self.root is None:
@@ -183,19 +203,15 @@ class ImageFormatCheck:
         root_filter = self._root_filter()
         if root_filter is None:
             row = connection.execute(
-                """
-                SELECT COUNT(DISTINCT f.sha512) AS count
-                FROM file_record AS f JOIN file_location AS fl ON fl.sha512=f.sha512 AND fl.location_status='ACTIVE'
-                WHERE f.status='ACTIVE'
-                """
+                "SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE'"
             ).fetchone()
         else:
             root, pattern = root_filter
             row = connection.execute(
                 """
-                SELECT COUNT(DISTINCT f.sha512) AS count
-                FROM file_record AS f JOIN file_location AS fl ON fl.sha512=f.sha512 AND fl.location_status='ACTIVE'
-                WHERE f.status='ACTIVE' AND (fl.absolute_path=? OR fl.absolute_path LIKE ?)
+                SELECT COUNT(*) AS count
+                FROM file_location
+                WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?)
                 """, (root, pattern)
             ).fetchone()
         return int(row["count"]) if row else 0
@@ -208,19 +224,20 @@ class ImageFormatCheck:
         if root_filter is None:
             cursor = connection.execute(
                 """
-                SELECT f.sha512, MIN(fl.absolute_path) AS absolute_path
-                FROM file_record AS f JOIN file_location AS fl ON fl.sha512=f.sha512 AND fl.location_status='ACTIVE'
-                WHERE f.status='ACTIVE' GROUP BY f.sha512 ORDER BY f.sha512
+                SELECT sha512, absolute_path
+                FROM file_location
+                WHERE location_status='ACTIVE'
+                ORDER BY absolute_path
                 """
             )
         else:
             root, pattern = root_filter
             cursor = connection.execute(
                 """
-                SELECT f.sha512, MIN(fl.absolute_path) AS absolute_path
-                FROM file_record AS f JOIN file_location AS fl ON fl.sha512=f.sha512 AND fl.location_status='ACTIVE'
-                WHERE f.status='ACTIVE' AND (fl.absolute_path=? OR fl.absolute_path LIKE ?)
-                GROUP BY f.sha512 ORDER BY f.sha512
+                SELECT sha512, absolute_path
+                FROM file_location
+                WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?)
+                ORDER BY absolute_path
                 """, (root, pattern)
             )
         for row in cursor:
@@ -231,31 +248,71 @@ class ImageFormatCheck:
         extension = target.path.suffix.lower()
         if extension not in SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported image extension: {target.path}")
-        with Image.open(target.path) as image:
-            detected = (image.format or "UNKNOWN").upper()
+
+        with target.path.open("rb") as stream:
+            header = stream.read(32)
+
+        detected = ImageFormatCheck._detect_signature(header)
         expected = EXPECTED_FORMATS[extension]
-        return _Result(target.sha512, extension, detected, MIME_TYPES.get(detected), detected == expected)
+        return _Result(
+            target.sha512,
+            ImageFormatCheck.result_key_prefix + extension,
+            extension,
+            detected,
+            MIME_TYPES.get(detected),
+            detected == expected,
+        )
+
+    @staticmethod
+    def _detect_signature(header: bytes) -> str:
+        if header.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "PNG"
+        if header.startswith(b"\xff\xd8\xff"):
+            return "JPEG"
+        if header.startswith((b"GIF87a", b"GIF89a")):
+            return "GIF"
+        if header.startswith(b"BM"):
+            return "BMP"
+        if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+            return "WEBP"
+        return "UNKNOWN"
 
     def _persist_batch(self, results: list[_Result], execution_id: int) -> None:
         if not results:
             return
         try:
-            import json
             with self.database.transaction() as connection:
                 connection.executemany(
                     """
-                    INSERT INTO analysis_result (sha512, module_id, result_key, confidence, payload_json, updated_at)
+                    INSERT INTO analysis_result
+                        (sha512, module_id, result_key, confidence, payload_json, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(sha512, module_id, result_key) DO UPDATE SET
-                        confidence=excluded.confidence, payload_json=excluded.payload_json, updated_at=excluded.updated_at
+                        confidence=excluded.confidence,
+                        payload_json=excluded.payload_json,
+                        updated_at=excluded.updated_at
                     """,
-                    [(
-                        r.sha512, self.module_id, self.result_key, 1.0,
-                        json.dumps({"extension": r.extension, "detected_format": r.detected_format,
-                                    "mime_type": r.mime_type, "matches": r.matches,
-                                    "execution_id": execution_id, "module_version": self.module_version},
-                                   ensure_ascii=False, sort_keys=True)
-                    ) for r in results]
+                    [
+                        (
+                            result.sha512,
+                            self.module_id,
+                            result.result_key,
+                            1.0,
+                            json.dumps(
+                                {
+                                    "extension": result.extension,
+                                    "detected_format": result.detected_format,
+                                    "mime_type": result.mime_type,
+                                    "matches": result.matches,
+                                    "execution_id": execution_id,
+                                    "module_version": self.module_version,
+                                },
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                        )
+                        for result in results
+                    ],
                 )
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać wyników sprawdzania formatów obrazów.") from exc
