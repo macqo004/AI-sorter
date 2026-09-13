@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 
-from .main_window_simimages import MainWindow as BaseMainWindow
+from .main_window_format_check import MainWindow as BaseMainWindow
 from .renamer_confirm_dialog import RenamerConfirmDialog
 from .renamer_worker_fixed import RenamerWorker
 
@@ -81,14 +81,9 @@ class MainWindow(BaseMainWindow):
     def on_renamer_progress(self, current: int, total: int, message: str) -> None:
         elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
         if total <= 0:
-            # Discovery has no known final total yet. Use an indeterminate bar so
-            # the GUI visibly proves that the worker is still alive.
             self.progress.setRange(0, 0)
             self.progress.setFormat(f"{message}  |  Elapsed: {self._format_duration(elapsed)}")
-            self.scan_details.setText(
-                f"Renamer\n{message}\n"
-                f"Elapsed: {self._format_duration(elapsed)}"
-            )
+            self.scan_details.setText(f"Renamer\n{message}\nElapsed: {self._format_duration(elapsed)}")
             self.statusBar().showMessage(message)
             return
 
@@ -109,7 +104,6 @@ class MainWindow(BaseMainWindow):
         unchanged = int(data["unchanged"])
         skipped_missing = int(data.get("skipped_missing", 0))
         preview = list(data["preview"])
-
         elapsed = time.perf_counter() - self.renamer_started_at if self.renamer_started_at else 0.0
         summary = (
             "Plan Renamera gotowy.\n\n"
@@ -134,10 +128,7 @@ class MainWindow(BaseMainWindow):
             return
 
         preview_limit = 100
-        preview_lines = [
-            f"{Path(source).name}  →  {Path(destination).name}"
-            for source, destination, _reason in preview[:preview_limit]
-        ]
+        preview_lines = [f"{Path(source).name}  →  {Path(destination).name}" for source, destination, _reason in preview[:preview_limit]]
         if len(preview) > preview_limit:
             preview_lines.append(f"… i {len(preview) - preview_limit:,} kolejnych zmian")
 
@@ -167,7 +158,6 @@ class MainWindow(BaseMainWindow):
         planned = int(data["planned"])
         renamed = int(data["renamed"])
         database_updated = int(data["database_updated"])
-
         self.elapsed_timer.stop()
         self.renamer_started_at = None
         self._set_module_controls_enabled(True)
