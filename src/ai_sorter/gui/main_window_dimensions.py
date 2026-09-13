@@ -36,7 +36,7 @@ class MainWindow(BaseMainWindow):
         if layout is None:
             raise RuntimeError("Main window layout is not available.")
 
-        self.dimension_button = QPushButton("Read Image Dimensions", self.centralWidget())
+        self.dimension_button = QPushButton("Read Image Dimensions…", self.centralWidget())
         self.dimension_button.clicked.connect(self.start_image_dimensions)
         self.alldup_import_button = QPushButton("Import AllDup database…", self.centralWidget())
         self.alldup_import_button.clicked.connect(self.start_alldup_import)
@@ -63,6 +63,16 @@ class MainWindow(BaseMainWindow):
         self.alldup_import_button.setEnabled(enabled)
 
     def start_image_dimensions(self) -> None:
+        root = QFileDialog.getExistingDirectory(
+            self,
+            "Choose folder for Image Dimensions",
+            str(self.project_path),
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+        )
+        if not root:
+            return
+        selected_root = Path(root)
+
         self.dimension_started_at = time.perf_counter()
         self._last_dimension_progress = None
         self._set_module_controls_enabled(False)
@@ -71,9 +81,12 @@ class MainWindow(BaseMainWindow):
         self.dimension_cancel_button.setEnabled(True)
         self._set_progress(0, 1, "Image Dimensions")
         self.progress.setFormat("Preparing…")
-        self.scan_details.setText("Image Dimensions is preparing…\nElapsed: 00:00:00")
+        self.scan_details.setText(
+            f"Image Dimensions\nFolder: {selected_root}\nPreparing…\nElapsed: 00:00:00"
+        )
+        self.statusBar().showMessage(f"Image Dimensions is preparing: {selected_root}")
 
-        module = ImageDimensions(self.database)
+        module = ImageDimensions(self.database, root=selected_root)
         self.dimension_thread = QThread(self)
         self.dimension_worker = ImageDimensionsWorker(module)
         self.dimension_worker.moveToThread(self.dimension_thread)
@@ -110,7 +123,6 @@ class MainWindow(BaseMainWindow):
             self.on_dimension_progress(self._last_dimension_progress)
             return
         if self.import_started_at:
-            # Import progress is pushed by the worker; there is no fake animation here.
             return
         super()._refresh_live_elapsed()
 
