@@ -59,10 +59,11 @@ class ImageDimensions:
     """Populate missing width/height metadata without hashing image contents."""
 
     module_id = "image_dimensions"
-    module_version = "0.1.3"
+    module_version = "0.1.4"
 
-    def __init__(self, database: Database, worker_count: int = 0, batch_size: int = 256) -> None:
+    def __init__(self, database: Database, root: Path | None = None, worker_count: int = 0, batch_size: int = 256) -> None:
         self.database = database
+        self.root = root.resolve() if root is not None else None
         self.worker_count = worker_count or max(1, min(8, (os.cpu_count() or 4) // 2 or 1))
         self.batch_size = max(32, batch_size)
         self._cancel_event = threading.Event()
@@ -141,39 +142,77 @@ class ImageDimensions:
         return DimensionSummary(execution_id, considered, processed, updated, skipped, failed, cancelled,
                                 time.perf_counter() - started_perf)
 
+    def _root_filter(self) -> tuple[str, str] | None:
+        if self.root is None:
+            return None
+        root_text = str(self.root).rstrip("\\/")
+        return root_text, root_text + "\\%"
+
     def _count_targets(self) -> int:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
-        row = connection.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM file_record AS f
-            WHERE f.status = 'ACTIVE'
-              AND (f.width_px IS NULL OR f.height_px IS NULL)
-              AND EXISTS (
-                  SELECT 1 FROM file_location AS fl
-                  WHERE fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
-              )
-            """
-        ).fetchone()
+        root_filter = self._root_filter()
+        if root_filter is None:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM file_record AS f
+                WHERE f.status = 'ACTIVE'
+                  AND (f.width_px IS NULL OR f.height_px IS NULL)
+                  AND EXISTS (
+                      SELECT 1 FROM file_location AS fl
+                      WHERE fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+                  )
+                """
+            ).fetchone()
+        else:
+            root_text, pattern = root_filter
+            row = connection.execute(
+                """
+                SELECT COUNT(DISTINCT f.sha512) AS count
+                FROM file_record AS f
+                JOIN file_location AS fl ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+                WHERE f.status = 'ACTIVE'
+                  AND (f.width_px IS NULL OR f.height_px IS NULL)
+                  AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)
+                """,
+                (root_text, pattern),
+            ).fetchone()
         return int(row["count"]) if row else 0
 
     def _targets(self) -> Iterable[_Target]:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
-        cursor = connection.execute(
-            """
-            SELECT f.sha512, fl.absolute_path
-            FROM file_record AS f
-            JOIN file_location AS fl
-              ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
-            WHERE f.status = 'ACTIVE'
-              AND (f.width_px IS NULL OR f.height_px IS NULL)
-            ORDER BY f.sha512, fl.absolute_path
-            """
-        )
+        root_filter = self._root_filter()
+        if root_filter is None:
+            cursor = connection.execute(
+                """
+                SELECT f.sha512, fl.absolute_path
+                FROM file_record AS f
+                JOIN file_location AS fl
+                  ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+                WHERE f.status = 'ACTIVE'
+                  AND (f.width_px IS NULL OR f.height_px IS NULL)
+                ORDER BY f.sha512, fl.absolute_path
+                """
+            )
+        else:
+            root_text, pattern = root_filter
+            cursor = connection.execute(
+                """
+                SELECT f.sha512, fl.absolute_path
+                FROM file_record AS f
+                JOIN file_location AS fl
+                  ON fl.sha512 = f.sha512 AND fl.location_status = 'ACTIVE'
+                WHERE f.status = 'ACTIVE'
+                  AND (f.width_px IS NULL OR f.height_px IS NULL)
+                  AND (fl.absolute_path = ? OR fl.absolute_path LIKE ?)
+                ORDER BY f.sha512, fl.absolute_path
+                """,
+                (root_text, pattern),
+            )
         current_sha: str | None = None
         chosen_path: Path | None = None
         first_path: Path | None = None
