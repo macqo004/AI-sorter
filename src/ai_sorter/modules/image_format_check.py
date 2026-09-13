@@ -17,22 +17,8 @@ from ..core.models import ModuleExecutionRecord, ModuleRecord
 ProgressCallback = Callable[["FormatProgress"], None]
 
 SUPPORTED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
-EXPECTED_FORMATS = {
-    ".jpg": "JPEG",
-    ".jpeg": "JPEG",
-    ".png": "PNG",
-    ".webp": "WEBP",
-    ".gif": "GIF",
-    ".bmp": "BMP",
-    ".pns": "PNG",
-}
-MIME_TYPES = {
-    "JPEG": "image/jpeg",
-    "PNG": "image/png",
-    "WEBP": "image/webp",
-    "GIF": "image/gif",
-    "BMP": "image/bmp",
-}
+EXPECTED_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP", ".gif": "GIF", ".bmp": "BMP", ".pns": "PNG"}
+MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif", "BMP": "image/bmp"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,13 +68,13 @@ class ImageFormatCheck:
     """
 
     module_id = "image_format_check"
-    module_version = "0.1.1"
+    module_version = "0.1.2"
     result_key_prefix = "image_format_check:"
 
     def __init__(self, database: Database, root: Path | None = None, worker_count: int = 0, batch_size: int = 512) -> None:
         self.database = database
         self.root = root.resolve() if root is not None else None
-        self.worker_count = worker_count or max(1, min(12, (os.cpu_count() or 4)))
+        self.worker_count = worker_count or max(1, min(12, os.cpu_count() or 4))
         self.batch_size = max(64, batch_size)
         self._cancel_event = threading.Event()
 
@@ -122,6 +108,22 @@ class ImageFormatCheck:
             last_emit_count = processed
             progress_callback(FormatProgress(considered, processed, matches, mismatches, failed, total, path))
 
+        def consume(done: set[Future[_Result]]) -> None:
+            nonlocal processed, matches, mismatches, failed
+            for future in done:
+                item = pending.pop(future)
+                processed += 1
+                try:
+                    result = future.result()
+                    result_batch.append(result)
+                    if result.matches:
+                        matches += 1
+                    else:
+                        mismatches += 1
+                except Exception:
+                    failed += 1
+                emit(str(item.path))
+
         try:
             with ThreadPoolExecutor(max_workers=self.worker_count, thread_name_prefix="format-check") as executor:
                 for target in self._targets():
@@ -132,43 +134,20 @@ class ImageFormatCheck:
                     pending[executor.submit(self._detect, target)] = target
                     if len(pending) >= self.worker_count * 8:
                         done, _ = wait(pending, return_when=FIRST_COMPLETED)
-                        for future in done:
-                            item = pending.pop(future)
-                            self._consume_result(future, item, result_batch)
-                            processed += 1
-                            if result_batch[-1].matches:
-                                matches += 1
-                            else:
-                                mismatches += 1
-                            emit(str(item.path))
+                        consume(done)
                         if len(result_batch) >= self.batch_size:
                             self._persist_batch(result_batch, execution_id)
                             result_batch.clear()
 
                 while pending:
                     done, _ = wait(pending, return_when=FIRST_COMPLETED)
-                    for future in done:
-                        item = pending.pop(future)
-                        before = len(result_batch)
-                        try:
-                            result = future.result()
-                            result_batch.append(result)
-                            processed += 1
-                            if result.matches:
-                                matches += 1
-                            else:
-                                mismatches += 1
-                        except Exception:
-                            processed += 1
-                            failed += 1
-                        emit(str(item.path))
+                    consume(done)
                     if len(result_batch) >= self.batch_size:
                         self._persist_batch(result_batch, execution_id)
                         result_batch.clear()
 
                 if result_batch:
                     self._persist_batch(result_batch, execution_id)
-                    result_batch.clear()
 
             cancelled = cancelled or self._cancel_event.is_set()
             status = "CANCELLED" if cancelled else ("COMPLETED_WITH_WARNINGS" if failed else "COMPLETED")
@@ -177,18 +156,9 @@ class ImageFormatCheck:
             status = "FAILED"
             raise
         finally:
-            self.database.finish_module_execution(
-                ModuleExecutionRecord(execution_id, self.module_id, started_at, status, processed, processed - failed, failed)
-            )
+            self.database.finish_module_execution(ModuleExecutionRecord(execution_id, self.module_id, started_at, status, processed, processed - failed, failed))
 
         return FormatSummary(execution_id, considered, processed, matches, mismatches, failed, cancelled, time.perf_counter() - started_perf)
-
-    @staticmethod
-    def _consume_result(future: Future[_Result], item: _Target, result_batch: list[_Result]) -> None:
-        try:
-            result_batch.append(future.result())
-        except Exception:
-            raise
 
     def _root_filter(self) -> tuple[str, str] | None:
         if self.root is None:
@@ -202,18 +172,10 @@ class ImageFormatCheck:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
         root_filter = self._root_filter()
         if root_filter is None:
-            row = connection.execute(
-                "SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE'"
-            ).fetchone()
+            row = connection.execute("SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE'").fetchone()
         else:
             root, pattern = root_filter
-            row = connection.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM file_location
-                WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?)
-                """, (root, pattern)
-            ).fetchone()
+            row = connection.execute("SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?)", (root, pattern)).fetchone()
         return int(row["count"]) if row else 0
 
     def _targets(self) -> Iterable[_Target]:
@@ -222,24 +184,10 @@ class ImageFormatCheck:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
         root_filter = self._root_filter()
         if root_filter is None:
-            cursor = connection.execute(
-                """
-                SELECT sha512, absolute_path
-                FROM file_location
-                WHERE location_status='ACTIVE'
-                ORDER BY absolute_path
-                """
-            )
+            cursor = connection.execute("SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' ORDER BY absolute_path")
         else:
             root, pattern = root_filter
-            cursor = connection.execute(
-                """
-                SELECT sha512, absolute_path
-                FROM file_location
-                WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?)
-                ORDER BY absolute_path
-                """, (root, pattern)
-            )
+            cursor = connection.execute("SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?) ORDER BY absolute_path", (root, pattern))
         for row in cursor:
             yield _Target(str(row["sha512"]), Path(str(row["absolute_path"])))
 
@@ -248,20 +196,11 @@ class ImageFormatCheck:
         extension = target.path.suffix.lower()
         if extension not in SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported image extension: {target.path}")
-
         with target.path.open("rb") as stream:
             header = stream.read(32)
-
         detected = ImageFormatCheck._detect_signature(header)
         expected = EXPECTED_FORMATS[extension]
-        return _Result(
-            target.sha512,
-            ImageFormatCheck.result_key_prefix + extension,
-            extension,
-            detected,
-            MIME_TYPES.get(detected),
-            detected == expected,
-        )
+        return _Result(target.sha512, ImageFormatCheck.result_key_prefix + extension, extension, detected, MIME_TYPES.get(detected), detected == expected)
 
     @staticmethod
     def _detect_signature(header: bytes) -> str:
@@ -284,33 +223,20 @@ class ImageFormatCheck:
             with self.database.transaction() as connection:
                 connection.executemany(
                     """
-                    INSERT INTO analysis_result
-                        (sha512, module_id, result_key, confidence, payload_json, updated_at)
+                    INSERT INTO analysis_result (sha512, module_id, result_key, confidence, payload_json, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(sha512, module_id, result_key) DO UPDATE SET
-                        confidence=excluded.confidence,
-                        payload_json=excluded.payload_json,
-                        updated_at=excluded.updated_at
+                        confidence=excluded.confidence, payload_json=excluded.payload_json, updated_at=excluded.updated_at
                     """,
                     [
-                        (
-                            result.sha512,
-                            self.module_id,
-                            result.result_key,
-                            1.0,
-                            json.dumps(
-                                {
-                                    "extension": result.extension,
-                                    "detected_format": result.detected_format,
-                                    "mime_type": result.mime_type,
-                                    "matches": result.matches,
-                                    "execution_id": execution_id,
-                                    "module_version": self.module_version,
-                                },
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
-                        )
+                        (result.sha512, self.module_id, result.result_key, 1.0, json.dumps({
+                            "extension": result.extension,
+                            "detected_format": result.detected_format,
+                            "mime_type": result.mime_type,
+                            "matches": result.matches,
+                            "execution_id": execution_id,
+                            "module_version": self.module_version,
+                        }, ensure_ascii=False, sort_keys=True))
                         for result in results
                     ],
                 )
