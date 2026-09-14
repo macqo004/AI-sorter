@@ -18,6 +18,7 @@ ProgressCallback = Callable[["FormatProgress"], None]
 
 SUPPORTED_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
 EXPECTED_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP", ".gif": "GIF", ".bmp": "BMP", ".pns": "PNG"}
+CANONICAL_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif", "BMP": ".bmp"}
 MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif", "BMP": "image/bmp"}
 
 
@@ -57,6 +58,7 @@ class _Result:
     extension: str
     detected_format: str
     mime_type: str | None
+    canonical_extension: str | None
     matches: bool
 
 
@@ -68,7 +70,7 @@ class ImageFormatCheck:
     """
 
     module_id = "image_format_check"
-    module_version = "0.1.2"
+    module_version = "0.1.3"
     result_key_prefix = "image_format_check:"
 
     def __init__(self, database: Database, root: Path | None = None, worker_count: int = 0, batch_size: int = 512) -> None:
@@ -200,7 +202,8 @@ class ImageFormatCheck:
             header = stream.read(32)
         detected = ImageFormatCheck._detect_signature(header)
         expected = EXPECTED_FORMATS[extension]
-        return _Result(target.sha512, ImageFormatCheck.result_key_prefix + extension, extension, detected, MIME_TYPES.get(detected), detected == expected)
+        canonical = CANONICAL_EXTENSIONS.get(detected)
+        return _Result(target.sha512, ImageFormatCheck.result_key_prefix + extension, extension, detected, MIME_TYPES.get(detected), canonical, detected == expected)
 
     @staticmethod
     def _detect_signature(header: bytes) -> str:
@@ -233,6 +236,7 @@ class ImageFormatCheck:
                             "extension": result.extension,
                             "detected_format": result.detected_format,
                             "mime_type": result.mime_type,
+                            "canonical_extension": result.canonical_extension,
                             "matches": result.matches,
                             "execution_id": execution_id,
                             "module_version": self.module_version,
