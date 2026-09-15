@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from ..modules.image_format_check import FormatProgress, FormatSummary, ImageFormatCheck
@@ -21,6 +21,9 @@ class MainWindow(BaseMainWindow):
         self.format_started_at: float | None = None
         self._last_format_progress: FormatProgress | None = None
         super().__init__(project_path, database, database_status, compute_backend)
+        self.scan_details.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
 
         layout = self.centralWidget().layout()
         if layout is None:
