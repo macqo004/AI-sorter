@@ -63,14 +63,10 @@ class _Result:
 
 
 class ImageFormatCheck:
-    """Compare declared image extensions with the real on-disk format.
-
-    The detector reads only a tiny file signature; it does not decode the image
-    and does not calculate SHA-512.
-    """
+    """Compare declared image extensions with the real on-disk format."""
 
     module_id = "image_format_check"
-    module_version = "0.1.3"
+    module_version = "0.1.4"
     result_key_prefix = "image_format_check:"
 
     def __init__(self, database: Database, root: Path | None = None, worker_count: int = 0, batch_size: int = 512) -> None:
@@ -82,6 +78,14 @@ class ImageFormatCheck:
 
     def cancel(self) -> None:
         self._cancel_event.set()
+
+    @staticmethod
+    def _extension_filter_sql() -> str:
+        return " OR ".join("lower(absolute_path) LIKE ?" for _ in sorted(SUPPORTED_EXTENSIONS))
+
+    @staticmethod
+    def _extension_params() -> tuple[str, ...]:
+        return tuple(f"%{ext}" for ext in sorted(SUPPORTED_EXTENSIONS))
 
     def run(self, progress_callback: ProgressCallback | None = None) -> FormatSummary:
         started_at = datetime.now(timezone.utc)
@@ -172,24 +176,40 @@ class ImageFormatCheck:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
+        extension_sql = self._extension_filter_sql()
+        extension_params = self._extension_params()
         root_filter = self._root_filter()
         if root_filter is None:
-            row = connection.execute("SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE'").fetchone()
+            row = connection.execute(
+                f"SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE' AND ({extension_sql})",
+                extension_params,
+            ).fetchone()
         else:
             root, pattern = root_filter
-            row = connection.execute("SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?)", (root, pattern)).fetchone()
+            row = connection.execute(
+                f"SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?) AND ({extension_sql})",
+                (root, pattern, *extension_params),
+            ).fetchone()
         return int(row["count"]) if row else 0
 
     def _targets(self) -> Iterable[_Target]:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
+        extension_sql = self._extension_filter_sql()
+        extension_params = self._extension_params()
         root_filter = self._root_filter()
         if root_filter is None:
-            cursor = connection.execute("SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' ORDER BY absolute_path")
+            cursor = connection.execute(
+                f"SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' AND ({extension_sql}) ORDER BY absolute_path",
+                extension_params,
+            )
         else:
             root, pattern = root_filter
-            cursor = connection.execute("SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?) ORDER BY absolute_path", (root, pattern))
+            cursor = connection.execute(
+                f"SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?) AND ({extension_sql}) ORDER BY absolute_path",
+                (root, pattern, *extension_params),
+            )
         for row in cursor:
             yield _Target(str(row["sha512"]), Path(str(row["absolute_path"])))
 
