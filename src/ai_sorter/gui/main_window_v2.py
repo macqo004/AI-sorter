@@ -268,6 +268,30 @@ class MainWindow(QMainWindow):
         self.scan_details.setText(f"Maintenance could not finish.\nReason: {message}")
         QMessageBox.critical(self, "Maintenance", message)
 
+    def _cleanup_scanner_thread(self) -> None:
+        """Release Scanner thread references after the worker thread exits."""
+        thread = self.scanner_thread
+        self.scanner_thread = None
+        self.scanner_worker = None
+        if thread is not None:
+            thread.deleteLater()
+
+    def _cleanup_color_thread(self) -> None:
+        """Release Color Analysis thread references after the worker thread exits."""
+        thread = self.color_thread
+        self.color_thread = None
+        self.color_worker = None
+        if thread is not None:
+            thread.deleteLater()
+
+    def _cleanup_maintenance_thread(self) -> None:
+        """Release maintenance thread references after the worker thread exits."""
+        thread = self.maintenance_thread
+        self.maintenance_thread = None
+        self.maintenance_worker = None
+        if thread is not None:
+            thread.deleteLater()
+
     def start_scan(self, root: Path) -> None:
         self.scan_started_at = time.perf_counter()
         self._last_scan_progress = None
@@ -418,3 +442,23 @@ class MainWindow(QMainWindow):
         self._set_module_controls_enabled(True)
         self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(False)
+        self._set_progress(summary.processed, max(self._color_total, summary.processed, 1), "Color Analysis")
+        self.color_started_at = None
+        self._last_color_progress = None
+        self.scan_details.setText(
+            f"Color Analysis finished.\n\n"
+            f"Considered: {summary.considered}\nProcessed: {summary.processed}\n"
+            f"Saved: {summary.saved}\nErrors: {summary.failed}\n"
+            f"Elapsed: {self._format_duration(summary.elapsed_seconds)}"
+        )
+
+    def on_color_failed(self, message: str) -> None:
+        self.elapsed_timer.stop()
+        self._refresh_database_status()
+        self._set_module_controls_enabled(True)
+        self.cancel_button.setEnabled(False)
+        self.color_cancel_button.setEnabled(False)
+        self._set_idle_progress()
+        self.color_started_at = None
+        self._last_color_progress = None
+        self.scan_details.setText(f"Color Analysis could not finish. Reason: {message}")
