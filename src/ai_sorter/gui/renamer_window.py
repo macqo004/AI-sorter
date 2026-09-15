@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -42,6 +43,14 @@ class MainWindow(BaseMainWindow):
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "renamer_button"):
             self.renamer_button.setEnabled(enabled)
+
+    def _count_supported_files(self, root: Path) -> int:
+        """Count scanner-supported files for the GUI progress bar."""
+        supported = {extension.lower() for extension in SUPPORTED_EXTENSIONS}
+        total = 0
+        for _dirpath, _dirnames, filenames in os.walk(root):
+            total += sum(1 for name in filenames if Path(name).suffix.lower() in supported)
+        return total
 
     def select_renamer_root(self) -> None:
         root = QFileDialog.getExistingDirectory(self, "Choose folder to rename")
