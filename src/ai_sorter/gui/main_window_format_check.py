@@ -38,10 +38,20 @@ class MainWindow(BaseMainWindow):
         else:
             layout.addWidget(self.format_button)
 
+        self.format_cancel_button = QPushButton("Cancel Image Format / Extension Check", self.centralWidget())
+        self.format_cancel_button.clicked.connect(self.cancel_format_check)
+        self.format_cancel_button.setEnabled(False)
+        if anchor_index >= 0:
+            layout.insertWidget(anchor_index + 2, self.format_cancel_button)
+        else:
+            layout.addWidget(self.format_cancel_button)
+
     def _set_module_controls_enabled(self, enabled: bool) -> None:
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "format_button"):
             self.format_button.setEnabled(enabled)
+        if hasattr(self, "format_cancel_button"):
+            self.format_cancel_button.setEnabled(False if enabled else self.format_worker is not None)
 
     def start_format_check(self) -> None:
         root = QFileDialog.getExistingDirectory(
@@ -61,6 +71,7 @@ class MainWindow(BaseMainWindow):
         self.color_cancel_button.setEnabled(False)
         if hasattr(self, "dimension_cancel_button"):
             self.dimension_cancel_button.setEnabled(False)
+        self.format_cancel_button.setEnabled(True)
         self._set_progress(0, 1, "Image Format / Extension Check")
         self.progress.setFormat("Preparing…")
         self.scan_details.setText(
@@ -84,6 +95,7 @@ class MainWindow(BaseMainWindow):
     def cancel_format_check(self) -> None:
         if self.format_worker:
             self.format_worker.cancel()
+            self.format_cancel_button.setEnabled(False)
             self.statusBar().showMessage("Cancelling Image Format / Extension Check…")
 
     def on_format_progress(self, progress: FormatProgress) -> None:
@@ -103,12 +115,18 @@ class MainWindow(BaseMainWindow):
         self.elapsed_timer.stop()
         self._refresh_database_status()
         self._set_module_controls_enabled(True)
+        self.format_cancel_button.setEnabled(False)
         self.format_started_at = None
         self._last_format_progress = None
         self._set_progress(summary.processed, max(1, summary.considered), "Image Format / Extension Check")
         rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
+        title = (
+            "Image Format / Extension Check cancelled."
+            if summary.cancelled
+            else "Image Format / Extension Check finished."
+        )
         self.scan_details.setText(
-            "Image Format / Extension Check finished.\n\n"
+            f"{title}\n\n"
             f"Considered: {summary.considered:,}\n"
             f"Processed: {summary.processed:,}\n"
             f"Matches: {summary.matches:,}\n"
@@ -117,7 +135,7 @@ class MainWindow(BaseMainWindow):
             f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
             f"Processed rate: {rate:.1f} files/s"
         )
-        self.statusBar().showMessage("Image Format / Extension Check finished.")
+        self.statusBar().showMessage(title)
         QMessageBox.information(self, "Image Format / Extension Check", self.scan_details.text())
         self._set_idle_progress()
 
@@ -125,6 +143,7 @@ class MainWindow(BaseMainWindow):
         self.elapsed_timer.stop()
         self._refresh_database_status()
         self._set_module_controls_enabled(True)
+        self.format_cancel_button.setEnabled(False)
         self.format_started_at = None
         self._last_format_progress = None
         self._set_idle_progress()
