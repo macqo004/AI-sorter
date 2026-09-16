@@ -135,7 +135,10 @@ class ImageExtensionFixer:
             return 0
 
         temporary: list[tuple[Path, Path, ExtensionChangeProposal]] = []
+        completed: list[tuple[Path, Path, ExtensionChangeProposal]] = []
         try:
+            # Stage every source first. This makes final extension changes independent
+            # of the original names, while every final destination remains no-overwrite.
             for index, proposal in enumerate(proposals):
                 if self._cancelled:
                     raise RuntimeError("Extension correction cancelled before filesystem changes completed.")
@@ -155,22 +158,33 @@ class ImageExtensionFixer:
                 proposal.source.rename(temporary_path)
                 temporary.append((temporary_path, proposal.destination, proposal))
 
+            # Final renames are deliberately performed with Path.rename(), never
+            # Path.replace(). On Windows an existing destination is rejected.
             for temporary_path, destination, proposal in temporary:
                 if destination.exists():
                     raise FileExistsError(
                         f"Destination appeared before final rename: {destination}"
                     )
                 temporary_path.rename(destination)
+                completed.append((temporary_path, destination, proposal))
 
-            self._update_database(temporary)
-            return len(proposals)
+            self._update_database(completed)
+            return len(completed)
         except Exception:
+            # First restore files already given their final name, then restore files
+            # still staged. Every restore checks that the original path is free, so
+            # rollback itself can never overwrite a file created by someone else.
+            for _temporary_path, destination, proposal in reversed(completed):
+                try:
+                    if destination.exists() and not proposal.source.exists():
+                        destination.rename(proposal.source)
+                except OSError:
+                    pass
             for temporary_path, _destination, proposal in reversed(temporary):
                 try:
                     if temporary_path.exists() and not proposal.source.exists():
                         temporary_path.rename(proposal.source)
                 except OSError:
-                    # Never replace a path that appeared while rolling back.
                     pass
             raise
 
@@ -192,14 +206,14 @@ class ImageExtensionFixer:
                 )
 
     def _update_database(
-        self, temporary: list[tuple[Path, Path, ExtensionChangeProposal]]
+        self, completed: list[tuple[Path, Path, ExtensionChangeProposal]]
     ) -> None:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
         try:
             with self.database.transaction() as connection:
-                for _temporary_path, destination, proposal in temporary:
+                for _temporary_path, destination, proposal in completed:
                     source_text = str(proposal.source.resolve())
                     destination_text = str(destination.resolve())
                     row = connection.execute(
