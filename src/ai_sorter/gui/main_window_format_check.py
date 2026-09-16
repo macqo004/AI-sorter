@@ -4,10 +4,13 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
+from ..image_extension_fixer import ImageExtensionFixer
 from ..modules.image_format_check import FormatProgress, FormatSummary, ImageFormatCheck
+from .image_extension_confirm_dialog import ImageExtensionConfirmDialog
+from .image_extension_fixer_worker import ImageExtensionFixerWorker
 from .image_format_check_worker import ImageFormatCheckWorker
 from .main_window_dimensions import MainWindow as BaseMainWindow
 
@@ -15,11 +18,16 @@ from .main_window_dimensions import MainWindow as BaseMainWindow
 class MainWindow(BaseMainWindow):
     """Application window with Image Dimensions, AllDup import and format checking."""
 
+    extension_apply_requested = Signal()
+
     def __init__(self, project_path: Path, database, database_status, compute_backend) -> None:
         self.format_thread: QThread | None = None
         self.format_worker: ImageFormatCheckWorker | None = None
         self.format_started_at: float | None = None
         self._last_format_progress: FormatProgress | None = None
+        self.extension_thread: QThread | None = None
+        self.extension_worker: ImageExtensionFixerWorker | None = None
+        self.extension_started_at: float | None = None
         self._stop_requested = False
         super().__init__(project_path, database, database_status, compute_backend)
         self.scan_details.setTextInteractionFlags(
@@ -44,6 +52,14 @@ class MainWindow(BaseMainWindow):
         else:
             layout.addWidget(self.format_button)
 
+        self.extension_button = QPushButton("Correct Image Extensions…", self.centralWidget())
+        self.extension_button.clicked.connect(self.start_extension_correction)
+        format_index = layout.indexOf(self.format_button)
+        if format_index >= 0:
+            layout.insertWidget(format_index + 1, self.extension_button)
+        else:
+            layout.addWidget(self.extension_button)
+
         progress_index = layout.indexOf(self.progress)
         self.stop_button = QPushButton("STOP", self.centralWidget())
         self.stop_button.setEnabled(False)
@@ -62,6 +78,8 @@ class MainWindow(BaseMainWindow):
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "format_button"):
             self.format_button.setEnabled(enabled)
+        if hasattr(self, "extension_button"):
+            self.extension_button.setEnabled(enabled)
         self._refresh_stop_button_state()
 
     def _active_cancellable_worker(self):
@@ -70,6 +88,7 @@ class MainWindow(BaseMainWindow):
             "color_worker",
             "dimension_worker",
             "format_worker",
+            "extension_worker",
             "renamer_worker",
         ):
             worker = getattr(self, attribute, None)
@@ -87,6 +106,7 @@ class MainWindow(BaseMainWindow):
                 "color_worker",
                 "dimension_worker",
                 "format_worker",
+                "extension_worker",
                 "renamer_worker",
                 "import_worker",
                 "maintenance_worker",
@@ -206,4 +226,113 @@ class MainWindow(BaseMainWindow):
             self.format_worker.deleteLater()
         self.format_thread = None
         self.format_worker = None
+        self._refresh_stop_button_state()
+
+    def start_extension_correction(self) -> None:
+        root = QFileDialog.getExistingDirectory(
+            self,
+            "Choose folder for Image Extension Correction",
+            str(self.project_path),
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+        )
+        if not root:
+            return
+        selected_root = Path(root)
+
+        self._stop_requested = False
+        self.extension_started_at = time.perf_counter()
+        self._set_module_controls_enabled(False)
+        self._set_progress(0, 1, "Image Extension Correction")
+        self.progress.setFormat("Planning…")
+        self.scan_details.setText(
+            f"Image Extension Correction\nFolder: {selected_root}\nPlanning safe extension changes…"
+        )
+        self.statusBar().showMessage(f"Preparing safe extension correction: {selected_root}")
+
+        fixer = ImageExtensionFixer(self.database, root=selected_root)
+        self.extension_thread = QThread(self)
+        self.extension_worker = ImageExtensionFixerWorker(fixer)
+        self.extension_worker.moveToThread(self.extension_thread)
+        self.extension_thread.started.connect(self.extension_worker.plan)
+        self.extension_worker.planned.connect(self.on_extension_planned)
+        self.extension_worker.finished.connect(self.on_extension_finished)
+        self.extension_worker.failed.connect(self.on_extension_failed)
+        self.extension_worker.finished.connect(self.extension_thread.quit)
+        self.extension_worker.failed.connect(self.extension_thread.quit)
+        self.extension_thread.finished.connect(self._cleanup_extension_thread)
+        self.extension_apply_requested.connect(self.extension_worker.execute)
+        self.extension_thread.start()
+
+    def on_extension_planned(self, proposals) -> None:
+        if self._stop_requested:
+            self.extension_thread.quit()
+            return
+        if not proposals:
+            self._set_module_controls_enabled(True)
+            self._stop_requested = False
+            self.scan_details.setText(
+                "Image Extension Correction\n\nNo safe extension changes were found."
+            )
+            self.statusBar().showMessage("No extension changes required.")
+            self._set_idle_progress()
+            self.extension_thread.quit()
+            return
+
+        dialog = ImageExtensionConfirmDialog(list(proposals), self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if not accepted:
+            self._set_module_controls_enabled(True)
+            self._stop_requested = False
+            self.scan_details.setText("Image Extension Correction\n\nOperation cancelled before any file was changed.")
+            self.statusBar().showMessage("Extension correction cancelled before execution.")
+            self._set_idle_progress()
+            self.extension_thread.quit()
+            return
+
+        self.progress.setFormat("Applying…")
+        self.scan_details.setText(
+            f"Image Extension Correction\nApplying {len(proposals):,} safe extension changes…"
+        )
+        self.statusBar().showMessage("Applying extension changes — existing files will never be overwritten.")
+        self.extension_apply_requested.emit()
+
+    def on_extension_finished(self, changed: int) -> None:
+        self.elapsed_timer.stop()
+        self._refresh_database_status()
+        self._set_module_controls_enabled(True)
+        self.extension_started_at = None
+        self._stop_requested = False
+        self.scan_details.setText(
+            "Image Extension Correction finished.\n\n"
+            f"Files renamed: {changed:,}\n"
+            "Image contents were not modified."
+        )
+        self.statusBar().showMessage(f"Extension correction finished: {changed:,} files renamed.")
+        QMessageBox.information(self, "Image Extension Correction", self.scan_details.text())
+        self._set_idle_progress()
+
+    def on_extension_failed(self, message: str) -> None:
+        self.elapsed_timer.stop()
+        self._refresh_database_status()
+        self._set_module_controls_enabled(True)
+        self.extension_started_at = None
+        self._stop_requested = False
+        self._set_idle_progress()
+        self.scan_details.setText(
+            "Image Extension Correction could not finish.\n\n"
+            f"Reason: {message}"
+        )
+        QMessageBox.critical(self, "Image Extension Correction", message)
+
+    def _cleanup_extension_thread(self) -> None:
+        if self.extension_thread:
+            self.extension_thread.deleteLater()
+        if self.extension_worker:
+            self.extension_worker.deleteLater()
+        try:
+            self.extension_apply_requested.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.extension_thread = None
+        self.extension_worker = None
         self._refresh_stop_button_state()
