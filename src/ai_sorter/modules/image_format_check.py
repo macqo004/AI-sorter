@@ -26,6 +26,7 @@ MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "G
 class FormatProgress:
     considered: int
     processed: int
+    skipped: int
     matches: int
     mismatches: int
     failed: int
@@ -38,6 +39,7 @@ class FormatSummary:
     execution_id: int
     considered: int
     processed: int
+    skipped: int
     matches: int
     mismatches: int
     failed: int
@@ -80,12 +82,21 @@ class ImageFormatCheck:
         self._cancel_event.set()
 
     @staticmethod
-    def _extension_filter_sql() -> str:
-        return " OR ".join("lower(absolute_path) LIKE ?" for _ in sorted(SUPPORTED_EXTENSIONS))
+    def _extension_filter_sql(alias: str = "file_location") -> str:
+        return " OR ".join(f"lower({alias}.absolute_path) LIKE ?" for _ in sorted(SUPPORTED_EXTENSIONS))
 
     @staticmethod
     def _extension_params() -> tuple[str, ...]:
         return tuple(f"%{ext}" for ext in sorted(SUPPORTED_EXTENSIONS))
+
+    @classmethod
+    def _checked_result_sql(cls) -> tuple[str, tuple[str, ...]]:
+        parts: list[str] = []
+        params: list[str] = []
+        for extension in sorted(SUPPORTED_EXTENSIONS):
+            parts.append("(lower(fl.absolute_path) LIKE ? AND ar.result_key = ?)")
+            params.extend((f"%{extension}", cls.result_key_prefix + extension))
+        return " OR ".join(parts), tuple(params)
 
     def run(self, progress_callback: ProgressCallback | None = None) -> FormatSummary:
         started_at = datetime.now(timezone.utc)
@@ -94,7 +105,7 @@ class ImageFormatCheck:
         self.database.register_module(ModuleRecord(self.module_id, "Image Format / Extension Check", self.module_version, True))
         execution_id = self.database.start_module_execution(self.module_id, started_at)
 
-        total = self._count_targets()
+        total, skipped = self._count_targets()
         considered = processed = matches = mismatches = failed = 0
         cancelled = False
         status = "FAILED"
@@ -112,7 +123,7 @@ class ImageFormatCheck:
                 return
             last_emit = now
             last_emit_count = processed
-            progress_callback(FormatProgress(considered, processed, matches, mismatches, failed, total, path))
+            progress_callback(FormatProgress(considered, processed, skipped, matches, mismatches, failed, total, path))
 
         def consume(done: set[Future[_Result]]) -> None:
             nonlocal processed, matches, mismatches, failed
@@ -164,7 +175,7 @@ class ImageFormatCheck:
         finally:
             self.database.finish_module_execution(ModuleExecutionRecord(execution_id, self.module_id, started_at, status, processed, processed - failed, failed))
 
-        return FormatSummary(execution_id, considered, processed, matches, mismatches, failed, cancelled, time.perf_counter() - started_perf)
+        return FormatSummary(execution_id, considered, processed, skipped, matches, mismatches, failed, cancelled, time.perf_counter() - started_perf)
 
     def _root_filter(self) -> tuple[str, str] | None:
         if self.root is None:
@@ -172,44 +183,80 @@ class ImageFormatCheck:
         root = str(self.root).rstrip("\\/")
         return root, root + "\\%"
 
-    def _count_targets(self) -> int:
+    def _count_targets(self) -> tuple[int, int]:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
-        extension_sql = self._extension_filter_sql()
+        extension_sql = self._extension_filter_sql("fl")
         extension_params = self._extension_params()
+        checked_sql, checked_params = self._checked_result_sql()
         root_filter = self._root_filter()
-        if root_filter is None:
-            row = connection.execute(
-                f"SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE' AND ({extension_sql})",
-                extension_params,
-            ).fetchone()
-        else:
+        base_from = "FROM file_location AS fl"
+        root_sql = ""
+        root_params: tuple[str, ...] = ()
+        if root_filter is not None:
             root, pattern = root_filter
-            row = connection.execute(
-                f"SELECT COUNT(*) AS count FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?) AND ({extension_sql})",
-                (root, pattern, *extension_params),
-            ).fetchone()
-        return int(row["count"]) if row else 0
+            root_sql = " AND (fl.absolute_path=? OR fl.absolute_path LIKE ?)"
+            root_params = (root, pattern)
+
+        base_where = f"fl.location_status='ACTIVE' AND ({extension_sql}){root_sql}"
+        row = connection.execute(
+            f"SELECT COUNT(*) AS count {base_from} WHERE {base_where}",
+            (*extension_params, *root_params),
+        ).fetchone()
+        all_count = int(row["count"]) if row else 0
+
+        row = connection.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            {base_from}
+            WHERE {base_where}
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM analysis_result AS ar
+                  WHERE ar.sha512 = fl.sha512
+                    AND ar.module_id = ?
+                    AND ({checked_sql})
+              )
+            """,
+            (*extension_params, *root_params, self.module_id, *checked_params),
+        ).fetchone()
+        pending_count = int(row["count"]) if row else 0
+        return pending_count, all_count - pending_count
 
     def _targets(self) -> Iterable[_Target]:
         connection = self.database.connection
         if connection is None:
             raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
-        extension_sql = self._extension_filter_sql()
+        extension_sql = self._extension_filter_sql("fl")
         extension_params = self._extension_params()
+        checked_sql, checked_params = self._checked_result_sql()
         root_filter = self._root_filter()
-        if root_filter is None:
-            cursor = connection.execute(
-                f"SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' AND ({extension_sql}) ORDER BY absolute_path",
-                extension_params,
-            )
-        else:
+        root_sql = ""
+        root_params: tuple[str, ...] = ()
+        if root_filter is not None:
             root, pattern = root_filter
-            cursor = connection.execute(
-                f"SELECT sha512, absolute_path FROM file_location WHERE location_status='ACTIVE' AND (absolute_path=? OR absolute_path LIKE ?) AND ({extension_sql}) ORDER BY absolute_path",
-                (root, pattern, *extension_params),
-            )
+            root_sql = " AND (fl.absolute_path=? OR fl.absolute_path LIKE ?)"
+            root_params = (root, pattern)
+
+        cursor = connection.execute(
+            f"""
+            SELECT fl.sha512, fl.absolute_path
+            FROM file_location AS fl
+            WHERE fl.location_status='ACTIVE'
+              AND ({extension_sql})
+              {root_sql}
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM analysis_result AS ar
+                  WHERE ar.sha512 = fl.sha512
+                    AND ar.module_id = ?
+                    AND ({checked_sql})
+              )
+            ORDER BY fl.absolute_path
+            """,
+            (*extension_params, *root_params, self.module_id, *checked_params),
+        )
         for row in cursor:
             yield _Target(str(row["sha512"]), Path(str(row["absolute_path"])))
 
