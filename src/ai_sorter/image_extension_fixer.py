@@ -82,11 +82,16 @@ class ImageExtensionFixer:
             if destination_key == source_key:
                 continue
             if destination_key in destinations:
-                raise FileExistsError(f"Zmiana rozszerzenia odrzucona: wiele plików wskazuje ten sam cel: {destination}")
+                # Never pick two sources for one destination. The first safe
+                # proposal remains available for review; the later one is skipped.
+                continue
             if not source.is_file():
                 continue
             if destination.exists():
-                raise FileExistsError(f"Zmiana rozszerzenia odrzucona, ponieważ plik docelowy już istnieje: {destination}")
+                # A collision is not a fatal error. Skip this one file and let
+                # the remaining safe proposals continue. The destination is
+                # deliberately never removed, replaced, or renamed.
+                continue
             destinations.add(destination_key)
             matches = payload.get("matches")
             reason = (
