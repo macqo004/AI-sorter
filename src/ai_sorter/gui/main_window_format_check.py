@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QThread, QTimer, Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
 
 from ..modules.image_format_check import FormatProgress, FormatSummary, ImageFormatCheck
@@ -20,10 +20,16 @@ class MainWindow(BaseMainWindow):
         self.format_worker: ImageFormatCheckWorker | None = None
         self.format_started_at: float | None = None
         self._last_format_progress: FormatProgress | None = None
+        self._stop_requested = False
         super().__init__(project_path, database, database_status, compute_backend)
         self.scan_details.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
+
+        # Keep the legacy per-module cancel controls out of the UI. The actual
+        # cancellation remains available through the single global STOP button.
+        self.cancel_button.hide()
+        self.color_cancel_button.hide()
 
         layout = self.centralWidget().layout()
         if layout is None:
@@ -38,20 +44,70 @@ class MainWindow(BaseMainWindow):
         else:
             layout.addWidget(self.format_button)
 
-        self.format_cancel_button = QPushButton("Cancel Image Format / Extension Check", self.centralWidget())
-        self.format_cancel_button.clicked.connect(self.cancel_format_check)
-        self.format_cancel_button.setEnabled(False)
-        if anchor_index >= 0:
-            layout.insertWidget(anchor_index + 2, self.format_cancel_button)
+        progress_index = layout.indexOf(self.progress)
+        self.stop_button = QPushButton("STOP", self.centralWidget())
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self.stop_current_operation)
+        if progress_index >= 0:
+            layout.insertWidget(progress_index, self.stop_button)
         else:
-            layout.addWidget(self.format_cancel_button)
+            layout.addWidget(self.stop_button)
+
+        self.stop_state_timer = QTimer(self)
+        self.stop_state_timer.setInterval(100)
+        self.stop_state_timer.timeout.connect(self._refresh_stop_button_state)
+        self.stop_state_timer.start()
 
     def _set_module_controls_enabled(self, enabled: bool) -> None:
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "format_button"):
             self.format_button.setEnabled(enabled)
-        if hasattr(self, "format_cancel_button"):
-            self.format_cancel_button.setEnabled(False if enabled else self.format_worker is not None)
+        self._refresh_stop_button_state()
+
+    def _active_cancellable_worker(self):
+        for attribute in (
+            "scanner_worker",
+            "color_worker",
+            "dimension_worker",
+            "format_worker",
+            "renamer_worker",
+        ):
+            worker = getattr(self, attribute, None)
+            if worker is not None and callable(getattr(worker, "cancel", None)):
+                return worker
+        return None
+
+    def _refresh_stop_button_state(self) -> None:
+        if not hasattr(self, "stop_button"):
+            return
+        active_workers = any(
+            getattr(self, attribute, None) is not None
+            for attribute in (
+                "scanner_worker",
+                "color_worker",
+                "dimension_worker",
+                "format_worker",
+                "renamer_worker",
+                "import_worker",
+                "maintenance_worker",
+            )
+        )
+        if not active_workers:
+            self._stop_requested = False
+            self.stop_button.setEnabled(False)
+            return
+        self.stop_button.setEnabled(not self._stop_requested and self._active_cancellable_worker() is not None)
+
+    def stop_current_operation(self) -> None:
+        worker = self._active_cancellable_worker()
+        if worker is None:
+            self.stop_button.setEnabled(False)
+            self.statusBar().showMessage("The current operation cannot be interrupted safely.")
+            return
+        self._stop_requested = True
+        self.stop_button.setEnabled(False)
+        worker.cancel()
+        self.statusBar().showMessage("Stopping current operation…")
 
     def start_format_check(self) -> None:
         root = QFileDialog.getExistingDirectory(
@@ -64,14 +120,10 @@ class MainWindow(BaseMainWindow):
             return
         selected_root = Path(root)
 
+        self._stop_requested = False
         self.format_started_at = time.perf_counter()
         self._last_format_progress = None
         self._set_module_controls_enabled(False)
-        self.cancel_button.setEnabled(False)
-        self.color_cancel_button.setEnabled(False)
-        if hasattr(self, "dimension_cancel_button"):
-            self.dimension_cancel_button.setEnabled(False)
-        self.format_cancel_button.setEnabled(True)
         self._set_progress(0, 1, "Image Format / Extension Check")
         self.progress.setFormat("Preparing…")
         self.scan_details.setText(
@@ -92,12 +144,6 @@ class MainWindow(BaseMainWindow):
         self.format_thread.finished.connect(self._cleanup_format_thread)
         self.format_thread.start()
 
-    def cancel_format_check(self) -> None:
-        if self.format_worker:
-            self.format_worker.cancel()
-            self.format_cancel_button.setEnabled(False)
-            self.statusBar().showMessage("Cancelling Image Format / Extension Check…")
-
     def on_format_progress(self, progress: FormatProgress) -> None:
         self._last_format_progress = progress
         self._set_progress(progress.processed, max(1, progress.total), "Image Format / Extension Check")
@@ -105,7 +151,9 @@ class MainWindow(BaseMainWindow):
         rate = progress.processed / elapsed if elapsed > 0 else 0.0
         self.scan_details.setText(
             "Image Format / Extension Check\n"
-            f"Processed: {progress.processed:,} / {progress.total:,}\n"
+            f"To check: {progress.total:,}\n"
+            f"Already checked: {progress.skipped:,}\n"
+            f"Processed: {progress.processed:,}\n"
             f"Matches: {progress.matches:,} | Mismatches: {progress.mismatches:,} | Errors: {progress.failed:,}\n"
             f"Rate: {rate:.1f} files/s | Elapsed: {self._format_duration(elapsed)}\n"
             f"Current: {progress.current_path or '—'}"
@@ -115,9 +163,9 @@ class MainWindow(BaseMainWindow):
         self.elapsed_timer.stop()
         self._refresh_database_status()
         self._set_module_controls_enabled(True)
-        self.format_cancel_button.setEnabled(False)
         self.format_started_at = None
         self._last_format_progress = None
+        self._stop_requested = False
         self._set_progress(summary.processed, max(1, summary.considered), "Image Format / Extension Check")
         rate = summary.processed / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0.0
         title = (
@@ -127,7 +175,8 @@ class MainWindow(BaseMainWindow):
         )
         self.scan_details.setText(
             f"{title}\n\n"
-            f"Considered: {summary.considered:,}\n"
+            f"To check: {summary.considered:,}\n"
+            f"Already checked: {summary.skipped:,}\n"
             f"Processed: {summary.processed:,}\n"
             f"Matches: {summary.matches:,}\n"
             f"Mismatches: {summary.mismatches:,}\n"
@@ -143,9 +192,9 @@ class MainWindow(BaseMainWindow):
         self.elapsed_timer.stop()
         self._refresh_database_status()
         self._set_module_controls_enabled(True)
-        self.format_cancel_button.setEnabled(False)
         self.format_started_at = None
         self._last_format_progress = None
+        self._stop_requested = False
         self._set_idle_progress()
         self.scan_details.setText(f"Image Format / Extension Check could not finish.\nReason: {message}")
         QMessageBox.critical(self, "Image Format / Extension Check", message)
@@ -157,3 +206,4 @@ class MainWindow(BaseMainWindow):
             self.format_worker.deleteLater()
         self.format_thread = None
         self.format_worker = None
+        self._refresh_stop_button_state()
