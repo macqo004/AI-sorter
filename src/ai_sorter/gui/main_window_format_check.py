@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QPushButton
+from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 
 from ..image_extension_fixer import ImageExtensionFixer
 from ..modules.image_format_check import FormatProgress, FormatSummary, ImageFormatCheck
