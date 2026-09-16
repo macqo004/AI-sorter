@@ -47,6 +47,7 @@ class MainWindow(BaseMainWindow):
             self.dimension_cancel_button = QPushButton("Cancel Image Dimensions", self.centralWidget())
             self.dimension_cancel_button.setEnabled(False)
             self.dimension_cancel_button.clicked.connect(self.cancel_image_dimensions)
+            self.dimension_cancel_button.hide()
             layout.insertWidget(progress_index + 1, self.dimension_cancel_button)
             layout.insertWidget(progress_index + 2, self.alldup_import_button)
         else:
@@ -54,6 +55,7 @@ class MainWindow(BaseMainWindow):
             self.dimension_cancel_button = QPushButton("Cancel Image Dimensions", self.centralWidget())
             self.dimension_cancel_button.setEnabled(False)
             self.dimension_cancel_button.clicked.connect(self.cancel_image_dimensions)
+            self.dimension_cancel_button.hide()
             layout.addWidget(self.dimension_cancel_button)
             layout.addWidget(self.alldup_import_button)
 
