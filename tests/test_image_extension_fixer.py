@@ -93,7 +93,7 @@ class ImageExtensionFixerTests(unittest.TestCase):
         self.assertEqual(row["sha512"], sha512)
         self.assertEqual(row["absolute_path"], str(destination.resolve()))
 
-    def test_existing_destination_refuses_entire_plan_without_overwrite(self) -> None:
+    def test_existing_destination_is_skipped_without_overwrite(self) -> None:
         source_content = b"\x89PNG\r\n\x1a\nsource"
         destination_content = b"do not overwrite"
         source = self.root / "picture.jpg"
@@ -111,13 +111,54 @@ class ImageExtensionFixerTests(unittest.TestCase):
         destination.write_bytes(destination_content)
 
         fixer = ImageExtensionFixer(self.db, self.root)
-        with self.assertRaises(FileExistsError):
-            fixer.plan()
+        proposals = fixer.plan()
 
+        self.assertEqual(proposals, [])
+        self.assertEqual(fixer.last_plan_diagnostics.destination_exists, 1)
         self.assertTrue(source.exists())
         self.assertEqual(source.read_bytes(), source_content)
         self.assertTrue(destination.exists())
         self.assertEqual(destination.read_bytes(), destination_content)
+
+
+    def test_directory_root_includes_safe_jpeg_canonicalization(self) -> None:
+        first = self.root / "first.jpeg"
+        second = self.root / "nested" / "second.jpeg"
+        second.parent.mkdir()
+
+        self._register_result(
+            first,
+            b"jpeg-one",
+            {
+                "extension": ".jpeg",
+                "detected_format": "JPEG",
+                "canonical_extension": ".jpg",
+                "matches": True,
+            },
+        )
+        self._register_result(
+            second,
+            b"jpeg-two",
+            {
+                "extension": ".jpeg",
+                "detected_format": "JPEG",
+                "canonical_extension": ".jpg",
+                "matches": True,
+            },
+        )
+
+        fixer = ImageExtensionFixer(self.db, self.root)
+        proposals = fixer.plan()
+
+        self.assertEqual(len(proposals), 2)
+        self.assertEqual(
+            {proposal.destination for proposal in proposals},
+            {
+                first.with_suffix(".jpg").resolve(),
+                second.with_suffix(".jpg").resolve(),
+            },
+        )
+        self.assertEqual(fixer.last_plan_diagnostics.proposals, 2)
 
     def test_matching_result_is_not_changed(self) -> None:
         content = b"\xff\xd8\xff" + b"payload"

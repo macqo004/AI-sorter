@@ -21,6 +21,32 @@ class ExtensionChangeProposal:
     detected_format: str
     reason: str
 
+@dataclass(frozen=True, slots=True)
+class ExtensionPlanDiagnostics:
+    rows_selected: int = 0
+    wrong_result_key: int = 0
+    invalid_canonical_extension: int = 0
+    invalid_detected_format: int = 0
+    same_source_destination: int = 0
+    duplicate_destination: int = 0
+    source_missing: int = 0
+    destination_exists: int = 0
+    proposals: int = 0
+
+    def format_text(self) -> str:
+        return (
+            f"Rows selected: {self.rows_selected:,}\n"
+            f"Skipped — wrong result key: {self.wrong_result_key:,}\n"
+            f"Skipped — invalid canonical extension: {self.invalid_canonical_extension:,}\n"
+            f"Skipped — invalid detected format: {self.invalid_detected_format:,}\n"
+            f"Skipped — source/destination identical: {self.same_source_destination:,}\n"
+            f"Skipped — duplicate destination: {self.duplicate_destination:,}\n"
+            f"Skipped — source missing: {self.source_missing:,}\n"
+            f"Skipped — destination exists: {self.destination_exists:,}\n"
+            f"Proposals: {self.proposals:,}"
+        )
+
+
 class ImageExtensionFixer:
     """Plan and execute extension-only corrections without overwriting files."""
     module_version = "0.1.1"
@@ -31,6 +57,7 @@ class ImageExtensionFixer:
         self.database = database
         self.root = root.resolve() if root is not None else None
         self._cancelled = False
+        self.last_plan_diagnostics = ExtensionPlanDiagnostics()
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -51,7 +78,7 @@ class ImageExtensionFixer:
             root_params = (root, root + "\\%")
         rows = connection.execute(
             f"""
-            SELECT fl.sha512, fl.absolute_path, ar.payload_json
+            SELECT fl.sha512, fl.absolute_path, ar.result_key, ar.payload_json
             FROM file_location AS fl
             JOIN analysis_result AS ar
               ON ar.sha512 = fl.sha512
@@ -64,34 +91,58 @@ class ImageExtensionFixer:
         ).fetchall()
         proposals: list[ExtensionChangeProposal] = []
         destinations: set[str] = set()
+        counters = {
+            "rows_selected": len(rows),
+            "wrong_result_key": 0,
+            "invalid_canonical_extension": 0,
+            "invalid_detected_format": 0,
+            "same_source_destination": 0,
+            "duplicate_destination": 0,
+            "source_missing": 0,
+            "destination_exists": 0,
+            "proposals": 0,
+        }
+
         for row in rows:
             try:
                 payload = json.loads(str(row["payload_json"]))
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise DatabaseError(f"Nie można odczytać wyniku kontroli rozszerzenia dla: {row['absolute_path']}") from exc
+                raise DatabaseError(
+                    f"Nie można odczytać wyniku kontroli rozszerzenia dla: {row['absolute_path']}"
+                ) from exc
+
+            source = Path(str(row["absolute_path"])).absolute()
+            expected_result_key = RESULT_KEY_PREFIX + source.suffix.lower()
+            if str(row["result_key"]).lower() != expected_result_key:
+                counters["wrong_result_key"] += 1
+                continue
+
             canonical = payload.get("canonical_extension")
             detected = payload.get("detected_format")
             if not isinstance(canonical, str) or canonical.lower() not in CANONICAL_EXTENSIONS:
+                counters["invalid_canonical_extension"] += 1
                 continue
             if not isinstance(detected, str) or detected not in VALID_FORMATS:
+                counters["invalid_detected_format"] += 1
                 continue
-            source = Path(str(row["absolute_path"])).absolute()
+
             destination = source.with_suffix(canonical.lower())
             source_key = self._path_key(source)
             destination_key = self._path_key(destination)
+
             if destination_key == source_key:
+                counters["same_source_destination"] += 1
                 continue
             if destination_key in destinations:
-                # Never pick two sources for one destination. The first safe
-                # proposal remains available for review; the later one is skipped.
+                counters["duplicate_destination"] += 1
                 continue
             if not source.is_file():
+                counters["source_missing"] += 1
                 continue
             if destination.exists():
-                # A collision is not a fatal error. Skip this one file and let
-                # the remaining safe proposals continue. The destination is
-                # deliberately never removed, replaced, or renamed.
+                counters["destination_exists"] += 1
                 continue
+
             destinations.add(destination_key)
             matches = payload.get("matches")
             reason = (
@@ -99,7 +150,18 @@ class ImageExtensionFixer:
                 if matches is False
                 else f"Image Format Check canonicalization: {source.suffix.lower()} -> {canonical.lower()}"
             )
-            proposals.append(ExtensionChangeProposal(source, destination, str(row["sha512"]).lower(), detected, reason))
+            proposals.append(
+                ExtensionChangeProposal(
+                    source,
+                    destination,
+                    str(row["sha512"]).lower(),
+                    detected,
+                    reason,
+                )
+            )
+
+        counters["proposals"] = len(proposals)
+        self.last_plan_diagnostics = ExtensionPlanDiagnostics(**counters)
         self._validate(proposals)
         return proposals
 

@@ -268,11 +268,17 @@ class MainWindow(BaseMainWindow):
             self.extension_thread.quit()
             return
         if not proposals:
+            diagnostics = (
+                self.extension_worker.fixer.last_plan_diagnostics
+                if self.extension_worker is not None
+                else None
+            )
+            details = "Image Extension Correction\n\nNo safe extension changes were found."
+            if diagnostics is not None:
+                details += f"\n\nPlanning diagnostics:\n{diagnostics.format_text()}"
             self._set_module_controls_enabled(True)
             self._stop_requested = False
-            self.scan_details.setText(
-                "Image Extension Correction\n\nNo safe extension changes were found."
-            )
+            self.scan_details.setText(details)
             self.statusBar().showMessage("No extension changes required.")
             self._set_idle_progress()
             self.extension_thread.quit()
