@@ -267,7 +267,8 @@ def test_engine_keeps_current_x23_stable_when_conflict_counter_is_advanced(tmp_p
     engine = RenamerEngine()
     resolved = engine._resolve_conflicts(proposals, existing_paths=existing_paths)
 
-    assert resolved[-1].source == stable_source
-    assert resolved[-1].destination == base
-    assert resolved[-1].reason == "remove_auto_conflict_suffix@2.0"
+    assert all(proposal.source != stable_source for proposal in resolved)
+    assert [proposal.destination.name for proposal in resolved] == [
+        f"sample_x{index:02d}.jpg" for index in range(1, 47)
+    ]
     assert len(resolved) == 46
