@@ -49,34 +49,34 @@ class RenamerWorker(QObject):
             current_path = pending_directories.pop()
             with os.scandir(current_path) as entries:
                 for entry in entries:
-                entry_path = Path(entry.path)
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        if self.recursive:
-                            pending_directories.append(entry_path)
+                    entry_path = Path(entry.path)
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if self.recursive:
+                                pending_directories.append(entry_path)
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
                         continue
-                    if not entry.is_file(follow_symlinks=False):
+
+                    existing_paths.add(self.engine._path_key(entry_path))
+                    if entry_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
                         continue
-                except OSError:
-                    continue
 
-                existing_paths.add(self.engine._path_key(entry_path))
-                if entry_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
-                    continue
-
-                discovered.append(entry_path)
-                discovered_count += 1
-                now = time.perf_counter()
-                if (
-                    discovered_count % self.PROGRESS_INTERVAL == 0
-                    or now - last_emit >= self.PROGRESS_TIME_SECONDS
-                ):
-                    self.progress.emit(
-                        discovered_count,
-                        0,
-                        f"Renamer — discovering files: {discovered_count:,}",
-                    )
-                    last_emit = now
+                    discovered.append(entry_path)
+                    discovered_count += 1
+                    now = time.perf_counter()
+                    if (
+                        discovered_count % self.PROGRESS_INTERVAL == 0
+                        or now - last_emit >= self.PROGRESS_TIME_SECONDS
+                    ):
+                        self.progress.emit(
+                            discovered_count,
+                            0,
+                            f"Renamer — discovering files: {discovered_count:,}",
+                        )
+                        last_emit = now
 
         discovered.sort(key=lambda path: str(path).casefold())
         self.progress.emit(
