@@ -11,6 +11,7 @@ from ai_sorter.renamer import (
     RemoveLeadingNonAlphanumericRule,
     RemoveLeadingSingleCharUnderscoreRule,
     RemoveTrailingNonAlphanumericRule,
+    RenameProposal,
     RenamerEngine,
 )
 
