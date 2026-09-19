@@ -83,7 +83,11 @@ class MainWindow(BaseMainWindow):
             return
         self._renamer_busy_frame = (self._renamer_busy_frame + 1) % 4
         dots = "." * (self._renamer_busy_frame + 1)
-        self.statusBar().showMessage(f"Renamer — processing{dots}")
+        message = f"Renamer — processing{dots}"
+        if hasattr(self, "renamer_activity_label"):
+            self.renamer_activity_label.setText(message)
+            self.renamer_activity_label.setVisible(True)
+        self.statusBar().showMessage(message)
 
     def _start_renamer_busy_indicator(self) -> None:
         self._renamer_busy_frame = 0
