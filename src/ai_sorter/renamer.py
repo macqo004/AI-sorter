@@ -207,6 +207,15 @@ class RenamerEngine:
         trimmed_stem = stem[:available_stem_length]
         return destination.with_name(f"{trimmed_stem}{tag}{suffix}")
 
+    @staticmethod
+    def _conflict_sequence_index(path: Path) -> int | None:
+        """Return the existing _xN slot number encoded in a filename, if any."""
+        match = AUTO_CONFLICT_SUFFIX_RE.search(path.stem)
+        if not match:
+            return None
+        digits = match.group(0)[2:]
+        return int(digits) if digits else 0
+
     def _resolve_conflicts(
         self,
         proposals: Iterable[RenameProposal],
@@ -214,67 +223,81 @@ class RenamerEngine:
         existing_paths: set[str] | None = None,
     ) -> list[RenameProposal]:
         proposals = list(proposals)
-        sources = {self._path_key(proposal.source) for proposal in proposals}
-        used_destinations: set[str] = set()
-        resolved: list[RenameProposal] = []
-        next_conflict_index: dict[str, int] = {}
+        if not proposals:
+            return []
 
         def path_exists(path: Path) -> bool:
             if existing_paths is not None:
                 return self._path_key(path) in existing_paths
             return path.exists()
 
+        # Every proposal whose transformed destination is the same path belongs
+        # to one filename-conflict group.  Conflict suffixes (_xN) are
+        # reversible positions, not permanent identities: the group is packed
+        # into base, _x01, _x02, ... whenever possible.
+        groups: dict[str, list[RenameProposal]] = {}
         for proposal in proposals:
-            destination = proposal.destination
-            destination_key = self._path_key(destination)
-            source_key = self._path_key(proposal.source)
-            conflict = (
-                destination_key in used_destinations
-                or (path_exists(destination) and destination_key not in sources)
-            )
+            groups.setdefault(self._path_key(proposal.destination), []).append(proposal)
 
-            if conflict:
-                is_current_conflict_suffix = bool(AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem))
-                if is_current_conflict_suffix:
-                    # Existing auto-conflict names remain stable while the base name is occupied.
-                    # This check must happen before conflict numbering, otherwise a prior proposal
-                    # can advance the shared counter past the source's own suffix (e.g. x23 -> x47).
-                    continue
-                index = next_conflict_index.get(destination_key, 1)
-                while True:
-                    candidate = self._conflict_name(destination, index)
-                    candidate_key = self._path_key(candidate)
-                    next_conflict_index[destination_key] = index + 1
-                    if candidate_key == source_key:
-                        if is_current_conflict_suffix:
-                            destination = candidate
-                            destination_key = candidate_key
-                            break
-                        index += 1
-                        continue
-                    if (
-                        candidate_key not in used_destinations
-                        and not path_exists(candidate)
-                        and candidate_key not in sources
-                    ):
-                        destination = candidate
-                        destination_key = candidate_key
+        resolved: list[RenameProposal] = []
+        used_destinations: set[str] = set()
+
+        def sort_key(proposal: RenameProposal) -> tuple[int, int, str]:
+            slot = self._conflict_sequence_index(proposal.source)
+            if slot is None:
+                return (1, 0, self._path_key(proposal.source))
+            return (0, slot, self._path_key(proposal.source))
+
+        for destination_key in sorted(groups):
+            group = sorted(groups[destination_key], key=sort_key)
+            base = group[0].destination
+            base_key = self._path_key(base)
+            group_source_keys = {self._path_key(proposal.source) for proposal in group}
+            base_occupied = path_exists(base) and base_key not in group_source_keys
+
+            next_index = 1
+            for position, proposal in enumerate(group):
+                if not base_occupied and position == 0:
+                    destination = base
+                else:
+                    while True:
+                        destination = self._conflict_name(base, next_index)
+                        next_index += 1
+                        candidate_key = self._path_key(destination)
+
+                        # A source belonging to this same conflict group will
+                        # be moved/reassigned as part of this packing pass.
+                        candidate_is_movable_source = candidate_key in group_source_keys
+                        candidate_is_occupied = path_exists(destination) and not candidate_is_movable_source
+
+                        if candidate_key in used_destinations:
+                            continue
+                        if candidate_is_occupied:
+                            continue
                         break
-                    index += 1
 
-                if destination_key == source_key and is_current_conflict_suffix:
+                destination_key_for_proposal = self._path_key(destination)
+                used_destinations.add(destination_key_for_proposal)
+
+                source_key = self._path_key(proposal.source)
+                if destination_key_for_proposal == source_key:
+                    # The file already occupies its compact sequence slot.
+                    # It remains physically unchanged and therefore needs no
+                    # rename proposal.
                     continue
-                reason = f"{proposal.reason}, auto-conflict-resolution"
-                proposal = RenameProposal(
-                    proposal.source,
-                    destination,
-                    proposal.rule_id,
-                    proposal.changed,
-                    reason,
-                )
 
-            used_destinations.add(destination_key)
-            resolved.append(proposal)
+                reason = proposal.reason
+                if destination != proposal.destination:
+                    reason = f"{reason}, auto-conflict-resolution"
+                resolved.append(
+                    RenameProposal(
+                        proposal.source,
+                        destination,
+                        proposal.rule_id,
+                        proposal.changed,
+                        reason,
+                    )
+                )
 
         self._validate_plan(resolved, existing_paths=existing_paths)
         return resolved
