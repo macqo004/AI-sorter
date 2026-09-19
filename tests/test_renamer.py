@@ -221,54 +221,51 @@ def test_engine_migrates_legacy_conflict_suffix_when_base_is_occupied(tmp_path: 
     assert proposals[0].destination == tmp_path / "sample_x01.jpg"
 
 
-def test_engine_keeps_current_x01_stable_when_base_is_occupied(tmp_path: Path) -> None:
+def test_engine_compacts_existing_conflict_suffix_gap(tmp_path: Path) -> None:
     base = tmp_path / "sample.jpg"
-    source = tmp_path / "sample_x01.jpg"
-    base.write_text("base", encoding="utf-8")
-    source.write_text("x", encoding="utf-8")
+    x01 = tmp_path / "sample_x01.jpg"
+    x05 = tmp_path / "sample_x05.jpg"
+    x09 = tmp_path / "sample_x09.jpg"
+    for path, value in ((base, "base"), (x01, "x01"), (x05, "x05"), (x09, "x09")):
+        path.write_text(value, encoding="utf-8")
 
     engine = RenamerEngine()
-    proposals = engine.plan([source])
+    proposals = engine.plan([x01, x05, x09])
 
-    assert proposals == []
-
-
-def test_engine_keeps_current_x23_stable_when_conflict_counter_is_advanced(tmp_path: Path) -> None:
-    base = tmp_path / "sample.jpg"
-    base.write_text("base", encoding="utf-8")
-
-    proposals = []
-    sources = []
-    for index in range(46):
-        source = tmp_path / f" source{index:02d}.jpg"
-        source.write_text(str(index), encoding="utf-8")
-        sources.append(source)
-        proposals.append(
-            RenameProposal(source, base, "test", True, "test")
-        )
-
-    stable_source = tmp_path / "sample_x23.jpg"
-    stable_source.write_text("stable", encoding="utf-8")
-    sources.append(stable_source)
-    proposals.append(
-        RenameProposal(
-            stable_source,
-            base,
-            "remove_auto_conflict_suffix@2.0",
-            True,
-            "remove_auto_conflict_suffix@2.0",
-        )
-    )
-
-    existing_paths = {
-        str(path.resolve()).casefold()
-        for path in [base, *sources]
-    }
-    engine = RenamerEngine()
-    resolved = engine._resolve_conflicts(proposals, existing_paths=existing_paths)
-
-    assert all(proposal.source != stable_source for proposal in resolved)
-    assert [proposal.destination.name for proposal in resolved] == [
-        f"sample_x{index:02d}.jpg" for index in range(1, 47)
+    assert [(proposal.source.name, proposal.destination.name) for proposal in proposals] == [
+        ("sample_x05.jpg", "sample_x02.jpg"),
+        ("sample_x09.jpg", "sample_x03.jpg"),
     ]
-    assert len(resolved) == 46
+
+
+def test_engine_uses_base_name_first_when_compacting_conflict_suffixes(tmp_path: Path) -> None:
+    x05 = tmp_path / "sample_x05.jpg"
+    x23 = tmp_path / "sample_x23.jpg"
+    x05.write_text("x05", encoding="utf-8")
+    x23.write_text("x23", encoding="utf-8")
+
+    engine = RenamerEngine()
+    proposals = engine.plan([x05, x23])
+
+    assert [(proposal.source.name, proposal.destination.name) for proposal in proposals] == [
+        ("sample_x05.jpg", "sample.jpg"),
+        ("sample_x23.jpg", "sample_x01.jpg"),
+    ]
+
+
+def test_engine_compacts_conflict_group_with_generic_renames(tmp_path: Path) -> None:
+    base = tmp_path / "sample.jpg"
+    x23 = tmp_path / "sample_x23.jpg"
+    generic = tmp_path / " sample.jpg"
+    base.write_text("base", encoding="utf-8")
+    x23.write_text("x23", encoding="utf-8")
+    generic.write_text("generic", encoding="utf-8")
+
+    engine = RenamerEngine()
+    proposals = engine.plan([x23, generic])
+
+    assert [(proposal.source.name, proposal.destination.name) for proposal in proposals] == [
+        ("sample_x23.jpg", "sample_x01.jpg"),
+        (" sample.jpg", "sample_x02.jpg"),
+    ]
+
