@@ -122,6 +122,31 @@ def test_engine_resolves_many_same_destination_conflicts_linearly(tmp_path: Path
     assert len({proposal.destination for proposal in resolved}) == 20
 
 
+def test_engine_treats_existing_directory_as_conflict(tmp_path: Path) -> None:
+    source = tmp_path / " sample.jpg"
+    occupied_directory = tmp_path / "sample.jpg"
+    source.write_text("x", encoding="utf-8")
+    occupied_directory.mkdir()
+
+    proposal = RenameProposal(
+        source,
+        occupied_directory,
+        "test",
+        True,
+        "test",
+    )
+    existing_paths = {
+        str(source.resolve()).casefold(),
+        str(occupied_directory.resolve()).casefold(),
+    }
+
+    engine = RenamerEngine()
+    resolved = engine._resolve_conflicts([proposal], existing_paths=existing_paths)
+
+    assert len(resolved) == 1
+    assert resolved[0].destination == tmp_path / "sample_x01.jpg"
+
+
 def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
     source = tmp_path / " sample.txt"
     destination = tmp_path / "sample.txt"
