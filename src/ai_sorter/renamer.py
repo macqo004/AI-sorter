@@ -181,13 +181,18 @@ class RenamerEngine:
         rule_id = "+".join(applied_rules)
         return RenameProposal(source, destination, rule_id, True, reason)
 
-    def plan(self, sources: Iterable[Path]) -> list[RenameProposal]:
+    def plan(
+        self,
+        sources: Iterable[Path],
+        *,
+        existing_paths: set[str] | None = None,
+    ) -> list[RenameProposal]:
         proposals: list[RenameProposal] = []
         for source in sources:
             proposal = self.propose(source)
             if proposal is not None and proposal.changed:
                 proposals.append(proposal)
-        return self._resolve_conflicts(proposals)
+        return self._resolve_conflicts(proposals, existing_paths=existing_paths)
 
     @staticmethod
     def _path_key(path: Path) -> str:
@@ -202,11 +207,22 @@ class RenamerEngine:
         trimmed_stem = stem[:available_stem_length]
         return destination.with_name(f"{trimmed_stem}{tag}{suffix}")
 
-    def _resolve_conflicts(self, proposals: Iterable[RenameProposal]) -> list[RenameProposal]:
+    def _resolve_conflicts(
+        self,
+        proposals: Iterable[RenameProposal],
+        *,
+        existing_paths: set[str] | None = None,
+    ) -> list[RenameProposal]:
         proposals = list(proposals)
         sources = {self._path_key(proposal.source) for proposal in proposals}
         used_destinations: set[str] = set()
         resolved: list[RenameProposal] = []
+        next_conflict_index: dict[str, int] = {}
+
+        def path_exists(path: Path) -> bool:
+            if existing_paths is not None:
+                return self._path_key(path) in existing_paths
+            return path.exists()
 
         for proposal in proposals:
             destination = proposal.destination
@@ -214,15 +230,16 @@ class RenamerEngine:
             source_key = self._path_key(proposal.source)
             conflict = (
                 destination_key in used_destinations
-                or (destination.exists() and destination_key not in sources)
+                or (path_exists(destination) and destination_key not in sources)
             )
 
             if conflict:
                 is_current_conflict_suffix = bool(AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem))
-                index = 1
+                index = next_conflict_index.get(destination_key, 1)
                 while True:
                     candidate = self._conflict_name(destination, index)
                     candidate_key = self._path_key(candidate)
+                    next_conflict_index[destination_key] = index + 1
                     if candidate_key == source_key:
                         if is_current_conflict_suffix:
                             destination = candidate
@@ -232,13 +249,14 @@ class RenamerEngine:
                         continue
                     if (
                         candidate_key not in used_destinations
-                        and not candidate.exists()
+                        and not path_exists(candidate)
                         and candidate_key not in sources
                     ):
                         destination = candidate
                         destination_key = candidate_key
                         break
                     index += 1
+
                 if destination_key == source_key and is_current_conflict_suffix:
                     continue
                 reason = f"{proposal.reason}, auto-conflict-resolution"
@@ -253,13 +271,24 @@ class RenamerEngine:
             used_destinations.add(destination_key)
             resolved.append(proposal)
 
-        self._validate_plan(resolved)
+        self._validate_plan(resolved, existing_paths=existing_paths)
         return resolved
 
-    def _validate_plan(self, proposals: Iterable[RenameProposal]) -> None:
+    def _validate_plan(
+        self,
+        proposals: Iterable[RenameProposal],
+        *,
+        existing_paths: set[str] | None = None,
+    ) -> None:
         proposals = list(proposals)
         destinations: dict[str, RenameProposal] = {}
         sources = {self._path_key(proposal.source) for proposal in proposals if proposal.changed}
+
+        def path_exists(path: Path) -> bool:
+            if existing_paths is not None:
+                return self._path_key(path) in existing_paths
+            return path.exists()
+
         for proposal in proposals:
             if not proposal.changed:
                 continue
@@ -272,7 +301,7 @@ class RenamerEngine:
                     f"{proposal.source} -> {proposal.destination}"
                 )
             destinations[destination_key] = proposal
-            if proposal.destination.exists() and self._path_key(proposal.destination) not in sources:
+            if path_exists(proposal.destination) and destination_key not in sources:
                 raise FileExistsError(
                     f"Rename refused because destination already exists: {proposal.destination}"
                 )
