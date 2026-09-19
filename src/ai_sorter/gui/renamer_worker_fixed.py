@@ -33,41 +33,60 @@ class RenamerWorker(QObject):
         self.engine = RenamerEngine()
         self.proposals: list[RenameProposal] = []
 
-    def _discover_files(self) -> list[Path]:
-        """Collect supported files while keeping the GUI visibly alive."""
+    def _discover_files(self) -> tuple[list[Path], set[str]]:
+        """Collect supported files and cache all existing paths for fast conflict planning."""
         root = self.root.resolve()
         if not root.is_dir():
             raise NotADirectoryError(f"Not a directory: {root}")
 
         discovered: list[Path] = []
+        existing_paths: set[str] = set()
+        pending_directories: list[Path] = [root]
+        discovered_count = 0
         last_emit = time.perf_counter()
-        for current, directories, filenames in os.walk(root):
-            directories.sort(key=str.casefold)
-            filenames.sort(key=str.casefold)
-            current_path = Path(current)
-            for filename in filenames:
-                if Path(filename).suffix.lower() not in self.SUPPORTED_EXTENSIONS:
+
+        while pending_directories:
+            current_path = pending_directories.pop()
+            entries = list(os.scandir(current_path))
+            entries.sort(key=lambda entry: entry.name.casefold())
+
+            for entry in entries:
+                entry_path = Path(entry.path)
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if self.recursive:
+                            pending_directories.append(entry_path)
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
                     continue
-                discovered.append(current_path / filename)
+
+                existing_paths.add(self.engine._path_key(entry_path))
+                if entry_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
+                    continue
+
+                discovered.append(entry_path)
+                discovered_count += 1
                 now = time.perf_counter()
                 if (
-                    len(discovered) % self.PROGRESS_INTERVAL == 0
+                    discovered_count % self.PROGRESS_INTERVAL == 0
                     or now - last_emit >= self.PROGRESS_TIME_SECONDS
                 ):
                     self.progress.emit(
-                        len(discovered),
+                        discovered_count,
                         0,
-                        f"Renamer — discovering files: {len(discovered):,}",
+                        f"Renamer — discovering files: {discovered_count:,}",
                     )
                     last_emit = now
 
         discovered.sort(key=lambda path: str(path).casefold())
         self.progress.emit(
-            len(discovered),
+            discovered_count,
             0,
-            f"Renamer — discovery complete: {len(discovered):,} files",
+            f"Renamer — discovery complete: {discovered_count:,} files",
         )
-        return discovered
+        return discovered, existing_paths
 
     def _propose_without_filesystem_check(self, source: Path) -> RenameProposal | None:
         """Apply rename rules without a filesystem stat; discovery already found the file."""
@@ -84,9 +103,6 @@ class RenamerWorker(QObject):
         if transformed_name == current_name:
             return RenameProposal(source, source, "", False, "No rule matched")
 
-        if not source.is_file():
-            raise FileNotFoundError(f"Source file does not exist: {source}")
-
         destination = source.with_name(transformed_name)
         reason = ", ".join(applied_rules)
         rule_id = "+".join(applied_rules)
@@ -95,7 +111,7 @@ class RenamerWorker(QObject):
     @Slot()
     def plan(self) -> None:
         try:
-            files = self._discover_files()
+            files, existing_paths = self._discover_files()
             scanned = len(files)
             proposals: list[RenameProposal] = []
             skipped_missing: list[str] = []
@@ -123,7 +139,20 @@ class RenamerWorker(QObject):
                     self.progress.emit(index, scanned, message)
                     last_emit = now
 
-            self.proposals = self.engine._resolve_conflicts(proposals)
+            self.progress.emit(
+                scanned,
+                scanned,
+                f"Renamer — resolving conflicts for {len(proposals):,} proposals…",
+            )
+            self.proposals = self.engine._resolve_conflicts(
+                proposals,
+                existing_paths=existing_paths,
+            )
+            self.progress.emit(
+                scanned,
+                scanned,
+                f"Renamer — plan complete: {len(self.proposals):,} changes",
+            )
             self.planned.emit(
                 {
                     "root": str(self.root),
