@@ -37,6 +37,14 @@ class MainWindow(BaseMainWindow):
         self.renamer_button = QPushButton("Rename files…", self.centralWidget())
         self.renamer_button.clicked.connect(self.select_renamer_root)
 
+        self.renamer_activity_label = QLabel("Renamer — processing.", self.centralWidget())
+        self.renamer_activity_label.setVisible(False)
+        progress_index = layout.indexOf(self.progress)
+        if progress_index >= 0:
+            layout.insertWidget(progress_index, self.renamer_activity_label)
+        else:
+            layout.addWidget(self.renamer_activity_label)
+
         anchor = getattr(self, "scan_button", None)
         anchor_index = layout.indexOf(anchor) if anchor is not None else -1
         if anchor_index >= 0:
@@ -67,8 +75,7 @@ class MainWindow(BaseMainWindow):
 
     def _refresh_renamer_busy_indicator(self) -> None:
         """Keep a visible activity indicator while the Renamer worker is alive."""
-        worker_active = self.renamer_worker is not None or self.renamer_thread is not None
-        if self.renamer_started_at is None or not worker_active:
+        if self.renamer_started_at is None:
             self._renamer_busy_timer.stop()
             return
         self._renamer_busy_frame = (self._renamer_busy_frame + 1) % 4
@@ -100,12 +107,4 @@ class MainWindow(BaseMainWindow):
             f"Renamer\nPlanning filename changes for:\n{root}\n\n"
             "Rules: deterministic filename cleanup and conflict resolution."
         )
-        self.renamer_activity_label = QLabel("Renamer — processing.", self.centralWidget())
-        self.renamer_activity_label.setVisible(False)
-        progress_index = layout.indexOf(self.progress)
-        if progress_index >= 0:
-            layout.insertWidget(progress_index, self.renamer_activity_label)
-        else:
-            layout.addWidget(self.renamer_activity_label)
-
         self.statusBar().showMessage("Renamer is preparing a rename plan…")
