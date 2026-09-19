@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
+from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QMessageBox, QPushButton
 
 from ..modules.scanner import SUPPORTED_EXTENSIONS
 from .main_window_format_check import MainWindow as BaseMainWindow
@@ -48,6 +48,14 @@ class MainWindow(BaseMainWindow):
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "renamer_button"):
             self.renamer_button.setEnabled(enabled)
+        if enabled:
+            self.renamer_started_at = None
+            if hasattr(self, "_renamer_busy_timer"):
+                self._renamer_busy_timer.stop()
+            if hasattr(self, "renamer_activity_label"):
+                self.renamer_activity_label.setVisible(False)
+        elif self.renamer_started_at is not None:
+            self._start_renamer_busy_indicator()
 
     def _count_supported_files(self, root: Path) -> int:
         """Count scanner-supported files for the GUI progress bar."""
@@ -92,4 +100,12 @@ class MainWindow(BaseMainWindow):
             f"Renamer\nPlanning filename changes for:\n{root}\n\n"
             "Rules: deterministic filename cleanup and conflict resolution."
         )
+        self.renamer_activity_label = QLabel("Renamer — processing.", self.centralWidget())
+        self.renamer_activity_label.setVisible(False)
+        progress_index = layout.indexOf(self.progress)
+        if progress_index >= 0:
+            layout.insertWidget(progress_index, self.renamer_activity_label)
+        else:
+            layout.addWidget(self.renamer_activity_label)
+
         self.statusBar().showMessage("Renamer is preparing a rename plan…")
