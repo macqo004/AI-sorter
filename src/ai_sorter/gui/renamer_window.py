@@ -25,10 +25,11 @@ class MainWindow(BaseMainWindow):
         self.renamer_worker: RenamerWorker | None = None
         self.renamer_started_at: float | None = None
         self._renamer_busy_frame = 0
+        super().__init__(project_path, database, database_status, compute_backend)
+
         self._renamer_busy_timer = QTimer(self)
         self._renamer_busy_timer.setInterval(400)
         self._renamer_busy_timer.timeout.connect(self._refresh_renamer_busy_indicator)
-        super().__init__(project_path, database, database_status, compute_backend)
 
         layout = self.centralWidget().layout()
         if layout is None:
