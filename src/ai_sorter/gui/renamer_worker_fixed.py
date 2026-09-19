@@ -51,16 +51,15 @@ class RenamerWorker(QObject):
                 for entry in entries:
                     entry_path = Path(entry.path)
                     try:
+                        existing_paths.add(self.engine._path_key(entry_path))
                         if entry.is_dir(follow_symlinks=False):
                             if self.recursive:
                                 pending_directories.append(entry_path)
                             continue
-                        if not entry.is_file(follow_symlinks=False):
+                        if not entry.is_file():
                             continue
                     except OSError:
                         continue
-
-                    existing_paths.add(self.engine._path_key(entry_path))
                     if entry_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
                         continue
 
