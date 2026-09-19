@@ -45,6 +45,7 @@ class FormatSummary:
     failed: int
     cancelled: bool
     elapsed_seconds: float
+    errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +112,7 @@ class ImageFormatCheck:
         status = "FAILED"
         pending: dict[Future[_Result], _Target] = {}
         result_batch: list[_Result] = []
+        error_details: list[str] = []
         last_emit = 0.0
         last_emit_count = 0
 
@@ -137,8 +139,11 @@ class ImageFormatCheck:
                         matches += 1
                     else:
                         mismatches += 1
-                except Exception:
+                except Exception as exc:
                     failed += 1
+                    error_details.append(
+                        f"{item.path}\n   {type(exc).__name__}: {exc}"
+                    )
                 emit(str(item.path))
 
         try:
@@ -175,7 +180,18 @@ class ImageFormatCheck:
         finally:
             self.database.finish_module_execution(ModuleExecutionRecord(execution_id, self.module_id, started_at, status, processed, processed - failed, failed))
 
-        return FormatSummary(execution_id, considered, processed, skipped, matches, mismatches, failed, cancelled, time.perf_counter() - started_perf)
+        return FormatSummary(
+            execution_id,
+            considered,
+            processed,
+            skipped,
+            matches,
+            mismatches,
+            failed,
+            cancelled,
+            time.perf_counter() - started_perf,
+            tuple(sorted(error_details, key=str.casefold)),
+        )
 
     def _root_filter(self) -> tuple[str, str] | None:
         if self.root is None:
