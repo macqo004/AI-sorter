@@ -235,6 +235,11 @@ class RenamerEngine:
 
             if conflict:
                 is_current_conflict_suffix = bool(AUTO_CONFLICT_SUFFIX_RE.search(proposal.source.stem))
+                if is_current_conflict_suffix:
+                    # Existing auto-conflict names remain stable while the base name is occupied.
+                    # This check must happen before conflict numbering, otherwise a prior proposal
+                    # can advance the shared counter past the source's own suffix (e.g. x23 -> x47).
+                    continue
                 index = next_conflict_index.get(destination_key, 1)
                 while True:
                     candidate = self._conflict_name(destination, index)
