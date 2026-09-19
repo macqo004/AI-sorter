@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QPushButton
 
 from ..modules.scanner import SUPPORTED_EXTENSIONS
@@ -24,6 +24,10 @@ class MainWindow(BaseMainWindow):
         self.renamer_thread: QThread | None = None
         self.renamer_worker: RenamerWorker | None = None
         self.renamer_started_at: float | None = None
+        self._renamer_busy_frame = 0
+        self._renamer_busy_timer = QTimer(self)
+        self._renamer_busy_timer.setInterval(400)
+        self._renamer_busy_timer.timeout.connect(self._refresh_renamer_busy_indicator)
         super().__init__(project_path, database, database_status, compute_backend)
 
         layout = self.centralWidget().layout()
@@ -53,6 +57,21 @@ class MainWindow(BaseMainWindow):
             total += sum(1 for name in filenames if Path(name).suffix.lower() in supported)
         return total
 
+    def _refresh_renamer_busy_indicator(self) -> None:
+        """Keep a visible activity indicator while the Renamer worker is alive."""
+        worker_active = self.renamer_worker is not None or self.renamer_thread is not None
+        if self.renamer_started_at is None or not worker_active:
+            self._renamer_busy_timer.stop()
+            return
+        self._renamer_busy_frame = (self._renamer_busy_frame + 1) % 4
+        dots = "." * (self._renamer_busy_frame + 1)
+        self.statusBar().showMessage(f"Renamer — processing{dots}")
+
+    def _start_renamer_busy_indicator(self) -> None:
+        self._renamer_busy_frame = 0
+        self._renamer_busy_timer.start()
+        self._refresh_renamer_busy_indicator()
+
     def select_renamer_root(self) -> None:
         root = QFileDialog.getExistingDirectory(self, "Choose folder to rename")
         if root:
@@ -60,6 +79,7 @@ class MainWindow(BaseMainWindow):
 
     def start_renamer(self, root: Path) -> None:
         self.renamer_started_at = time.perf_counter()
+        self._start_renamer_busy_indicator()
         self._set_module_controls_enabled(False)
         self.cancel_button.setEnabled(False)
         self.color_cancel_button.setEnabled(False)
