@@ -47,10 +47,8 @@ class RenamerWorker(QObject):
 
         while pending_directories:
             current_path = pending_directories.pop()
-            entries = list(os.scandir(current_path))
-            entries.sort(key=lambda entry: entry.name.casefold())
-
-            for entry in entries:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
                 entry_path = Path(entry.path)
                 try:
                     if entry.is_dir(follow_symlinks=False):
