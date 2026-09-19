@@ -85,6 +85,42 @@ def test_rules_are_applied_sequentially() -> None:
     assert name == "Furina.jpg.png"
 
 
+
+def test_engine_resolves_many_same_destination_conflicts_linearly(tmp_path: Path) -> None:
+    base = tmp_path / "sample.jpg"
+    existing_x01 = tmp_path / "sample_x01.jpg"
+    existing_x02 = tmp_path / "sample_x02.jpg"
+    base.write_text("base", encoding="utf-8")
+    existing_x01.write_text("x01", encoding="utf-8")
+    existing_x02.write_text("x02", encoding="utf-8")
+
+    proposals = []
+    for index in range(20):
+        source = tmp_path / f" sample ({index}).jpg"
+        source.write_text(str(index), encoding="utf-8")
+        proposals.append(
+            RenameProposal(
+                source,
+                base,
+                "test",
+                True,
+                "test",
+            )
+        )
+
+    existing_paths = {
+        str(path.resolve()).casefold()
+        for path in (base, existing_x01, existing_x02)
+    }
+    engine = RenamerEngine()
+    resolved = engine._resolve_conflicts(proposals, existing_paths=existing_paths)
+
+    assert [proposal.destination.name for proposal in resolved] == [
+        f"sample_x{index:02d}.jpg" for index in range(3, 23)
+    ]
+    assert len({proposal.destination for proposal in resolved}) == 20
+
+
 def test_engine_auto_resolves_existing_destination(tmp_path: Path) -> None:
     source = tmp_path / " sample.txt"
     destination = tmp_path / "sample.txt"
