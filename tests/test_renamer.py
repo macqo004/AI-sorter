@@ -238,6 +238,24 @@ def test_engine_compacts_existing_conflict_suffix_gap(tmp_path: Path) -> None:
     ]
 
 
+def test_engine_moves_high_conflict_suffix_to_smallest_free_slot(tmp_path: Path) -> None:
+    base = tmp_path / "sample.jpg"
+    x01 = tmp_path / "sample_x01.jpg"
+    x02 = tmp_path / "sample_x02.jpg"
+    x03 = tmp_path / "sample_x03.jpg"
+    x04 = tmp_path / "sample_x04.jpg"
+    x23 = tmp_path / "sample_x23.jpg"
+    for path in (base, x01, x02, x03, x04, x23):
+        path.write_text("x", encoding="utf-8")
+
+    engine = RenamerEngine()
+    proposals = engine.plan([x23])
+
+    assert [(proposal.source.name, proposal.destination.name) for proposal in proposals] == [
+        ("sample_x23.jpg", "sample_x05.jpg"),
+    ]
+
+
 def test_engine_uses_base_name_first_when_compacting_conflict_suffixes(tmp_path: Path) -> None:
     x05 = tmp_path / "sample_x05.jpg"
     x23 = tmp_path / "sample_x23.jpg"
