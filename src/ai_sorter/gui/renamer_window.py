@@ -77,6 +77,8 @@ class MainWindow(BaseMainWindow):
         """Keep a visible activity indicator while the Renamer worker is alive."""
         if self.renamer_started_at is None:
             self._renamer_busy_timer.stop()
+            if hasattr(self, "renamer_activity_label"):
+                self.renamer_activity_label.setVisible(False)
             return
         self._renamer_busy_frame = (self._renamer_busy_frame + 1) % 4
         dots = "." * (self._renamer_busy_frame + 1)
