@@ -231,3 +231,43 @@ def test_engine_keeps_current_x01_stable_when_base_is_occupied(tmp_path: Path) -
     proposals = engine.plan([source])
 
     assert proposals == []
+
+
+def test_engine_keeps_current_x23_stable_when_conflict_counter_is_advanced(tmp_path: Path) -> None:
+    base = tmp_path / "sample.jpg"
+    base.write_text("base", encoding="utf-8")
+
+    proposals = []
+    sources = []
+    for index in range(46):
+        source = tmp_path / f" source{index:02d}.jpg"
+        source.write_text(str(index), encoding="utf-8")
+        sources.append(source)
+        proposals.append(
+            RenameProposal(source, base, "test", True, "test")
+        )
+
+    stable_source = tmp_path / "sample_x23.jpg"
+    stable_source.write_text("stable", encoding="utf-8")
+    sources.append(stable_source)
+    proposals.append(
+        RenameProposal(
+            stable_source,
+            base,
+            "remove_auto_conflict_suffix@2.0",
+            True,
+            "remove_auto_conflict_suffix@2.0",
+        )
+    )
+
+    existing_paths = {
+        str(path.resolve()).casefold()
+        for path in [base, *sources]
+    }
+    engine = RenamerEngine()
+    resolved = engine._resolve_conflicts(proposals, existing_paths=existing_paths)
+
+    assert resolved[-1].source == stable_source
+    assert resolved[-1].destination == base
+    assert resolved[-1].reason == "remove_auto_conflict_suffix@2.0"
+    assert len(resolved) == 46
