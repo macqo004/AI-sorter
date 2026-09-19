@@ -48,6 +48,23 @@ class ImageFormatCheckTests(unittest.TestCase):
         self.assertEqual(second.matches, 0)
         self.assertEqual(second.mismatches, 0)
 
+    def test_error_details_are_reported_and_failed_file_is_retried(self) -> None:
+        path = self.root / "missing.jpg"
+        self._register_file(path, b"\\xff\\xd8\\xff" + b"x" * 29)
+        path.unlink()
+
+        first = ImageFormatCheck(self.db, root=self.root, worker_count=1).run()
+        self.assertEqual(first.processed, 1)
+        self.assertEqual(first.failed, 1)
+        self.assertEqual(first.errors, (f"{path.resolve()}\\n   FileNotFoundError: [Errno 2] No such file or directory: '{path.resolve()}'",))
+
+        second = ImageFormatCheck(self.db, root=self.root, worker_count=1).run()
+        self.assertEqual(second.processed, 1)
+        self.assertEqual(second.skipped, 0)
+        self.assertEqual(second.failed, 1)
+        self.assertEqual(second.errors, first.errors)
+
+
     def test_same_sha_with_new_extension_is_checked_again(self) -> None:
         content = b"\xff\xd8\xff" + b"x" * 29
         sha512 = self._register_file(self.root / "one.jpg", content)
