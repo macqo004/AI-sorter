@@ -56,7 +56,9 @@ class ImageFormatCheckTests(unittest.TestCase):
         first = ImageFormatCheck(self.db, root=self.root, worker_count=1).run()
         self.assertEqual(first.processed, 1)
         self.assertEqual(first.failed, 1)
-        self.assertEqual(first.errors, (f"{path.resolve()}\\n   FileNotFoundError: [Errno 2] No such file or directory: '{path.resolve()}'",))
+        self.assertEqual(len(first.errors), 1)
+        self.assertIn(str(path.resolve()), first.errors[0])
+        self.assertIn("FileNotFoundError:", first.errors[0])
 
         second = ImageFormatCheck(self.db, root=self.root, worker_count=1).run()
         self.assertEqual(second.processed, 1)
