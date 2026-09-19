@@ -193,7 +193,7 @@ class MainWindow(BaseMainWindow):
             if summary.cancelled
             else "Image Format / Extension Check finished."
         )
-        self.scan_details.setText(
+        details = (
             f"{title}\n\n"
             f"To check: {summary.considered:,}\n"
             f"Already checked: {summary.skipped:,}\n"
@@ -204,6 +204,9 @@ class MainWindow(BaseMainWindow):
             f"Total time: {self._format_duration(summary.elapsed_seconds)}\n"
             f"Processed rate: {rate:.1f} files/s"
         )
+        if summary.errors:
+            details += "\n\nError details:\n" + "\n\n".join(summary.errors)
+        self.scan_details.setText(details)
         self.statusBar().showMessage(title)
         QMessageBox.information(self, "Image Format / Extension Check", self.scan_details.text())
         self._set_idle_progress()
