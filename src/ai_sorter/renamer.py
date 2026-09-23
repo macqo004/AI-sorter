@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 DUPLICATE_SUFFIX_RE = re.compile(r"(?:\s*\(\d+\)|\s*\[\d+\]|\s*\{\d+\})$")
-COPY_SUFFIX_RE = re.compile(r"(?i)(?:[\s_-]+(?:copy|kopia)|\s*\((?:copy|kopia)\))$")
+COPY_SUFFIX_RE = re.compile(r"(?i)(?:[\s_-]+(?:copy|kopia)(?:[\s_-]+\d+)?|\s*\((?:copy|kopia)(?:\s*\d+)?\))$")
 DUPLICATE_IMAGE_EXTENSION_RE = re.compile(r"(?i)(\.(?:jpe?g|png|webp|gif|bmp|pns))$")
 AUTO_CONFLICT_SUFFIX_RE = re.compile(r"(?i)_x(?:\d+)?$")
 LEGACY_CONFLICT_SUFFIX_RE = re.compile(r"(?i)__dup-(\d+)$")
