@@ -93,6 +93,28 @@ class ImageExtensionFixerTests(unittest.TestCase):
         self.assertEqual(row["sha512"], sha512)
         self.assertEqual(row["absolute_path"], str(destination.resolve()))
 
+    def test_pns_is_canonicalized_to_png_even_with_stale_canonical_payload(self) -> None:
+        content = b"\x89PNG\r\n\x1a\n" + b"pns-payload"
+        source = self.root / "picture.pns"
+        sha512 = self._register_result(
+            source,
+            content,
+            {
+                "extension": ".pns",
+                "detected_format": "PNG",
+                "canonical_extension": ".pns",
+                "matches": True,
+            },
+        )
+
+        fixer = ImageExtensionFixer(self.db, self.root)
+        proposals = fixer.plan()
+
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].source, source.resolve())
+        self.assertEqual(proposals[0].destination, (self.root / "picture.png").resolve())
+        self.assertEqual(proposals[0].sha512, sha512)
+
     def test_existing_destination_is_skipped_without_overwrite(self) -> None:
         source_content = b"\x89PNG\r\n\x1a\nsource"
         destination_content = b"do not overwrite"
