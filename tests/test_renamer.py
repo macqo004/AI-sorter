@@ -6,6 +6,7 @@ import pytest
 
 from ai_sorter.renamer import (
     RemoveAutoConflictSuffixRule,
+    RemoveCopySuffixRule,
     RemoveDuplicateImageExtensionRule,
     RemoveDuplicateSuffixRule,
     RemoveLeadingNonAlphanumericRule,
@@ -26,6 +27,19 @@ def test_remove_duplicate_suffix() -> None:
     assert rule.apply("furina.jpg") == "furina.jpg"
 
 
+def test_remove_copy_suffix() -> None:
+    rule = RemoveCopySuffixRule()
+    assert rule.apply("daneobrazu copy.jpg") == "daneobrazu.jpg"
+    assert rule.apply("daneobrazu_copy.jpg") == "daneobrazu.jpg"
+    assert rule.apply("daneobrazu-copy.jpg") == "daneobrazu.jpg"
+    assert rule.apply("daneobrazu (copy).jpg") == "daneobrazu.jpg"
+    assert rule.apply("daneobrazu kopia.png") == "daneobrazu.png"
+    assert rule.apply("daneobrazu_kopia.webp") == "daneobrazu.webp"
+    assert rule.apply("copy.jpg") == "copy.jpg"
+    assert rule.apply("kopia.jpg") == "kopia.jpg"
+
+
+
 def test_remove_auto_conflict_suffix() -> None:
     rule = RemoveAutoConflictSuffixRule()
     assert rule.apply("sample_x.jpg") == "sample.jpg"
@@ -43,6 +57,7 @@ def test_remove_leading_single_char_underscore() -> None:
     assert rule.apply("a_fabjnfalfjan.jpg") == "fabjnfalfjan.jpg"
     assert rule.apply("Z_image.png") == "image.png"
     assert rule.apply("1_image.webp") == "image.webp"
+    assert rule.apply("4_daneobrazu.jpg") == "daneobrazu.jpg"
     assert rule.apply("ab_image.jpg") == "ab_image.jpg"
     assert rule.apply("_image.jpg") == "_image.jpg"
     assert rule.apply("a__image.jpg") == "_image.jpg"
