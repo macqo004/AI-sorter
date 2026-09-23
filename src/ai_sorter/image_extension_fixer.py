@@ -49,7 +49,7 @@ class ExtensionPlanDiagnostics:
 
 class ImageExtensionFixer:
     """Plan and execute extension-only corrections without overwriting files."""
-    module_version = "0.1.1"
+    module_version = "0.1.2"
     TEMP_PREFIX = ".asrtmp-ext-"
     TEMP_SUFFIX = ".tmp"
 
@@ -117,16 +117,19 @@ class ImageExtensionFixer:
                 counters["wrong_result_key"] += 1
                 continue
 
-            canonical = payload.get("canonical_extension")
             detected = payload.get("detected_format")
-            if not isinstance(canonical, str) or canonical.lower() not in CANONICAL_EXTENSIONS:
-                counters["invalid_canonical_extension"] += 1
-                continue
             if not isinstance(detected, str) or detected not in VALID_FORMATS:
                 counters["invalid_detected_format"] += 1
                 continue
 
-            destination = source.with_suffix(canonical.lower())
+            # Derive the destination extension from the detected file format,
+            # rather than trusting the persisted canonical_extension field.
+            # This keeps older Image Format Check results useful and, in
+            # particular, guarantees that real PNG files named *.pns become
+            # *.png even when the stored payload predates canonicalization.
+            canonical = CANONICAL_EXTENSIONS[detected]
+
+            destination = source.with_suffix(canonical)
             source_key = self._path_key(source)
             destination_key = self._path_key(destination)
 
