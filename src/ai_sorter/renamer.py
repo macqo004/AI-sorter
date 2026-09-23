@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 DUPLICATE_SUFFIX_RE = re.compile(r"(?:\s*\(\d+\)|\s*\[\d+\]|\s*\{\d+\})$")
+COPY_SUFFIX_RE = re.compile(r"(?i)(?:[\s_-]+(?:copy|kopia)|\s*\((?:copy|kopia)\))$")
 DUPLICATE_IMAGE_EXTENSION_RE = re.compile(r"(?i)(\.(?:jpe?g|png|webp|gif|bmp|pns))$")
 AUTO_CONFLICT_SUFFIX_RE = re.compile(r"(?i)_x(?:\d+)?$")
 LEGACY_CONFLICT_SUFFIX_RE = re.compile(r"(?i)__dup-(\d+)$")
@@ -46,6 +47,26 @@ class RemoveDuplicateSuffixRule:
         transformed = stem
         while True:
             next_stem = DUPLICATE_SUFFIX_RE.sub("", transformed)
+            if next_stem == transformed:
+                break
+            transformed = next_stem
+        if not transformed:
+            return filename
+        return f"{transformed}{suffix}"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveCopySuffixRule:
+    rule_id: str = "remove_copy_suffix"
+    version: str = "1.0"
+
+    def apply(self, filename: str) -> str:
+        path = Path(filename)
+        stem = path.stem
+        suffix = path.suffix
+        transformed = stem
+        while True:
+            next_stem = COPY_SUFFIX_RE.sub("", transformed)
             if next_stem == transformed:
                 break
             transformed = next_stem
@@ -141,6 +162,7 @@ class RemoveDuplicateImageExtensionRule:
 
 DEFAULT_RULES: tuple[FilenameRule, ...] = (
     RemoveDuplicateSuffixRule(),
+    RemoveCopySuffixRule(),
     RemoveAutoConflictSuffixRule(),
     RemoveLeadingSingleCharUnderscoreRule(),
     RemoveLeadingNonAlphanumericRule(),
