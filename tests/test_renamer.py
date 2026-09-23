@@ -32,6 +32,8 @@ def test_remove_copy_suffix() -> None:
     assert rule.apply("daneobrazu copy.jpg") == "daneobrazu.jpg"
     assert rule.apply("daneobrazu_copy.jpg") == "daneobrazu.jpg"
     assert rule.apply("daneobrazu-copy.jpg") == "daneobrazu.jpg"
+    assert rule.apply("daneobrazu - Copy 2.jpg") == "daneobrazu.jpg"
+    assert rule.apply("daneobrazu (copy 2).jpg") == "daneobrazu.jpg"
     assert rule.apply("daneobrazu (copy).jpg") == "daneobrazu.jpg"
     assert rule.apply("daneobrazu kopia.png") == "daneobrazu.png"
     assert rule.apply("daneobrazu_kopia.webp") == "daneobrazu.webp"
