@@ -12,6 +12,7 @@ from ..modules.image_format_check import FormatProgress, FormatSummary, ImageFor
 from .image_extension_confirm_dialog import ImageExtensionConfirmDialog
 from .image_extension_fixer_worker import ImageExtensionFixerWorker
 from .image_format_check_worker import ImageFormatCheckWorker
+from .path_memory import choose_directory
 from .main_window_dimensions import MainWindow as BaseMainWindow
 
 
@@ -130,15 +131,13 @@ class MainWindow(BaseMainWindow):
         self.statusBar().showMessage("Stopping current operation…")
 
     def start_format_check(self) -> None:
-        root = QFileDialog.getExistingDirectory(
+        selected_root = choose_directory(
             self,
             "Choose folder for Image Format / Extension Check",
-            str(self.project_path),
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+            self.project_path,
         )
-        if not root:
+        if selected_root is None:
             return
-        selected_root = Path(root)
 
         self._stop_requested = False
         self.format_started_at = time.perf_counter()
@@ -232,15 +231,13 @@ class MainWindow(BaseMainWindow):
         self._refresh_stop_button_state()
 
     def start_extension_correction(self) -> None:
-        root = QFileDialog.getExistingDirectory(
+        selected_root = choose_directory(
             self,
             "Choose folder for Image Extension Correction",
-            str(self.project_path),
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+            self.project_path,
         )
-        if not root:
+        if selected_root is None:
             return
-        selected_root = Path(root)
 
         self._stop_requested = False
         self.extension_started_at = time.perf_counter()
