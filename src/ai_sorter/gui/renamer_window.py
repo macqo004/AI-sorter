@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QMessageBox, QPushBu
 
 from ..modules.scanner import SUPPORTED_EXTENSIONS
 from .main_window_format_check import MainWindow as BaseMainWindow
+from .path_memory import choose_directory
 from .renamer_confirm_dialog import RenamerConfirmDialog
 from .renamer_worker_fixed import RenamerWorker
 
@@ -95,9 +96,9 @@ class MainWindow(BaseMainWindow):
         self._refresh_renamer_busy_indicator()
 
     def select_renamer_root(self) -> None:
-        root = QFileDialog.getExistingDirectory(self, "Choose folder to rename")
-        if root:
-            self.start_renamer(Path(root))
+        root = choose_directory(self, "Choose folder to rename", self.project_path)
+        if root is not None:
+            self.start_renamer(root)
 
     def start_renamer(self, root: Path) -> None:
         self.renamer_started_at = time.perf_counter()
