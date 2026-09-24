@@ -10,7 +10,7 @@ from .core.database import Database, DatabaseError
 
 MODULE_ID = "image_format_check"
 RESULT_KEY_PREFIX = "image_format_check:"
-CANONICAL_EXTENSIONS = frozenset({".jpg", ".png", ".webp", ".gif", ".bmp"})
+CANONICAL_EXTENSIONS = {\n    "JPEG": ".jpg",\n    "PNG": ".png",\n    "WEBP": ".webp",\n    "GIF": ".gif",\n    "BMP": ".bmp",\n}
 VALID_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "BMP"})
 
 @dataclass(frozen=True, slots=True)
