@@ -10,7 +10,13 @@ from .core.database import Database, DatabaseError
 
 MODULE_ID = "image_format_check"
 RESULT_KEY_PREFIX = "image_format_check:"
-CANONICAL_EXTENSIONS = {\n    "JPEG": ".jpg",\n    "PNG": ".png",\n    "WEBP": ".webp",\n    "GIF": ".gif",\n    "BMP": ".bmp",\n}
+CANONICAL_EXTENSIONS = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "WEBP": ".webp",
+    "GIF": ".gif",
+    "BMP": ".bmp",
+}
 VALID_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "BMP"})
 
 @dataclass(frozen=True, slots=True)
@@ -43,16 +49,28 @@ class ExtensionPlanDiagnostics:
 
     def format_text(self) -> str:
         return (
-            f"Rows selected: {self.rows_selected:,}\n"
-            f"Skipped — wrong result key: {self.wrong_result_key:,}\n"
-            f"Skipped — invalid canonical extension: {self.invalid_canonical_extension:,}\n"
-            f"Skipped — invalid detected format: {self.invalid_detected_format:,}\n"
-            f"Skipped — source/destination identical: {self.same_source_destination:,}\n"
-            f"Skipped — duplicate destination: {self.duplicate_destination:,}\n"
-            f"Skipped — source missing: {self.source_missing:,}\n"
-            f"Skipped — destination exists: {self.destination_exists:,}\n"
+            f"Rows selected: {self.rows_selected:,}
+"
+            f"Skipped — wrong result key: {self.wrong_result_key:,}
+"
+            f"Skipped — invalid canonical extension: {self.invalid_canonical_extension:,}
+"
+            f"Skipped — invalid detected format: {self.invalid_detected_format:,}
+"
+            f"Skipped — source/destination identical: {self.same_source_destination:,}
+"
+            f"Skipped — duplicate destination: {self.duplicate_destination:,}
+"
+            f"Skipped — source missing: {self.source_missing:,}
+"
+            f"Skipped — destination exists: {self.destination_exists:,}
+"
             f"Proposals: {self.proposals:,}"
-            + (f"\n\nSkipped details:\n" + "\n".join(f"- {item.path} | {item.reason}" + (f" | detected={item.detected_format}" if item.detected_format else "") + (f" | destination={item.destination}" if item.destination else "") for item in self.skipped_details) if self.skipped_details else "")
+            + (f"
+
+Skipped details:
+" + "
+".join(f"- {item.path} | {item.reason}" + (f" | detected={item.detected_format}" if item.detected_format else "") + (f" | destination={item.destination}" if item.destination else "") for item in self.skipped_details) if self.skipped_details else "")
         )
 
 
