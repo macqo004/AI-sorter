@@ -22,6 +22,13 @@ class ExtensionChangeProposal:
     reason: str
 
 @dataclass(frozen=True, slots=True)
+class ExtensionPlanSkip:
+    path: str
+    reason: str
+    detected_format: str | None = None
+    destination: str | None = None
+
+@dataclass(frozen=True, slots=True)
 class ExtensionPlanDiagnostics:
     rows_selected: int = 0
     wrong_result_key: int = 0
@@ -32,6 +39,7 @@ class ExtensionPlanDiagnostics:
     source_missing: int = 0
     destination_exists: int = 0
     proposals: int = 0
+    skipped_details: tuple[ExtensionPlanSkip, ...] = ()
 
     def format_text(self) -> str:
         return (
@@ -44,6 +52,7 @@ class ExtensionPlanDiagnostics:
             f"Skipped — source missing: {self.source_missing:,}\n"
             f"Skipped — destination exists: {self.destination_exists:,}\n"
             f"Proposals: {self.proposals:,}"
+            + (f"\n\nSkipped details:\n" + "\n".join(f"- {item.path} | {item.reason}" + (f" | detected={item.detected_format}" if item.detected_format else "") + (f" | destination={item.destination}" if item.destination else "") for item in self.skipped_details) if self.skipped_details else "")
         )
 
 
@@ -91,6 +100,7 @@ class ImageExtensionFixer:
         ).fetchall()
         proposals: list[ExtensionChangeProposal] = []
         destinations: set[str] = set()
+        skipped_details: list[ExtensionPlanSkip] = []
         counters = {
             "rows_selected": len(rows),
             "wrong_result_key": 0,
@@ -115,11 +125,13 @@ class ImageExtensionFixer:
             expected_result_key = RESULT_KEY_PREFIX + source.suffix.lower()
             if str(row["result_key"]).lower() != expected_result_key:
                 counters["wrong_result_key"] += 1
+                skipped_details.append(ExtensionPlanSkip(str(source), "wrong result key", None, None))
                 continue
 
             detected = payload.get("detected_format")
             if not isinstance(detected, str) or detected not in VALID_FORMATS:
                 counters["invalid_detected_format"] += 1
+                skipped_details.append(ExtensionPlanSkip(str(source), "invalid detected format", str(detected) if detected is not None else None, None))
                 continue
 
             # Derive the destination extension from the detected file format,
@@ -135,15 +147,19 @@ class ImageExtensionFixer:
 
             if destination_key == source_key:
                 counters["same_source_destination"] += 1
+                skipped_details.append(ExtensionPlanSkip(str(source), "source/destination identical", detected, str(destination)))
                 continue
             if destination_key in destinations:
                 counters["duplicate_destination"] += 1
+                skipped_details.append(ExtensionPlanSkip(str(source), "duplicate destination in plan", detected, str(destination)))
                 continue
             if not source.is_file():
                 counters["source_missing"] += 1
+                skipped_details.append(ExtensionPlanSkip(str(source), "source missing", detected, str(destination)))
                 continue
             if destination.exists():
                 counters["destination_exists"] += 1
+                skipped_details.append(ExtensionPlanSkip(str(source), "destination already exists", detected, str(destination)))
                 continue
 
             destinations.add(destination_key)
@@ -164,7 +180,7 @@ class ImageExtensionFixer:
             )
 
         counters["proposals"] = len(proposals)
-        self.last_plan_diagnostics = ExtensionPlanDiagnostics(**counters)
+        self.last_plan_diagnostics = ExtensionPlanDiagnostics(**counters, skipped_details=tuple(skipped_details))
         self._validate(proposals)
         return proposals
 
