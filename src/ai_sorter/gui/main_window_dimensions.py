@@ -12,6 +12,7 @@ from ..alldup_full_import import AllDupFullImporter, FullImportStats
 from ..modules.image_dimensions import DimensionProgress, DimensionSummary, ImageDimensions
 from .alldup_full_import_worker import AllDupFullImportWorker
 from .image_dimensions_worker import ImageDimensionsWorker
+from .path_memory import choose_directory
 from .main_window_v2 import MainWindow as BaseMainWindow
 
 
@@ -65,15 +66,9 @@ class MainWindow(BaseMainWindow):
         self.alldup_import_button.setEnabled(enabled)
 
     def start_image_dimensions(self) -> None:
-        root = QFileDialog.getExistingDirectory(
-            self,
-            "Choose folder for Image Dimensions",
-            str(self.project_path),
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
-        )
-        if not root:
+        selected_root = choose_directory(self, "Choose folder for Image Dimensions", self.project_path)
+        if selected_root is None:
             return
-        selected_root = Path(root)
 
         self.dimension_started_at = time.perf_counter()
         self._last_dimension_progress = None
