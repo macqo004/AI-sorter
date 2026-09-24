@@ -273,9 +273,16 @@ class MainWindow(BaseMainWindow):
                 if self.extension_worker is not None
                 else None
             )
+            report_path = None
+            if diagnostics is not None and diagnostics.skipped_details:
+                report_path = diagnostics.write_skipped_report(
+                    self.project_path / "image_extension_correction_skipped.txt"
+                )
             details = "Image Extension Correction\n\nNo safe extension changes were found."
             if diagnostics is not None:
                 details += f"\n\nPlanning diagnostics:\n{diagnostics.format_text()}"
+                if report_path is not None:
+                    details += f"\n\nSkipped file details written to:\n{report_path}"
             self._set_module_controls_enabled(True)
             self._stop_requested = False
             self.scan_details.setText(details)
