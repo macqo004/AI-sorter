@@ -28,6 +28,7 @@ from ..modules.color_analysis import ColorAnalysis, ColorProgress, ColorSummary
 from ..modules.scanner import SUPPORTED_EXTENSIONS, ScanProgress, ScanSummary, Scanner
 from .color_analysis_worker import ColorAnalysisWorker
 from .maintenance_worker import MaintenanceWorker
+from .path_memory import choose_directory
 from .results_browser import ResultsBrowser
 from .scanner_worker import ScannerWorker
 
@@ -158,14 +159,14 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("Idle")
 
     def select_scan_root(self) -> None:
-        root = QFileDialog.getExistingDirectory(self, "Choose folder to scan")
-        if root:
-            self.start_scan(Path(root))
+        root = choose_directory(self, "Choose folder to scan", self.project_path)
+        if root is not None:
+            self.start_scan(root)
 
     def select_color_root(self) -> None:
-        root = QFileDialog.getExistingDirectory(self, "Choose folder for Color / BW analysis")
-        if root:
-            self.start_color_analysis(Path(root))
+        root = choose_directory(self, "Choose folder for Color / BW analysis", self.project_path)
+        if root is not None:
+            self.start_color_analysis(root)
 
     def browse_results(self) -> None:
         ResultsBrowser(self.database, self).exec()
