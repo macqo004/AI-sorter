@@ -47,7 +47,7 @@ class ExtensionPlanDiagnostics:
     proposals: int = 0
     skipped_details: tuple[ExtensionPlanSkip, ...] = ()
 
-    def format_text(self) -> str:
+    def format_text(self, include_details: bool = False) -> str:
         text = (
             f"Rows selected: {self.rows_selected:,}\n"
             f"Skipped — wrong result key: {self.wrong_result_key:,}\n"
@@ -59,7 +59,7 @@ class ExtensionPlanDiagnostics:
             f"Skipped — destination exists: {self.destination_exists:,}\n"
             f"Proposals: {self.proposals:,}"
         )
-        if self.skipped_details:
+        if include_details and self.skipped_details:
             text += "\n\nSkipped details:\n" + "\n".join(
                 f"- {item.path} | {item.reason}"
                 + (f" | detected={item.detected_format}" if item.detected_format else "")
@@ -67,6 +67,29 @@ class ExtensionPlanDiagnostics:
                 for item in self.skipped_details
             )
         return text
+
+    def write_skipped_report(self, path: Path) -> Path:
+        """Write per-file skip details to a project-side text report."""
+        report_path = Path(path)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "AI-Sorter — Image Extension Correction — skipped files",
+            "",
+            self.format_text(),
+            "",
+            "Skipped details:",
+        ]
+        if self.skipped_details:
+            lines.extend(
+                f"- {item.path} | {item.reason}"
+                + (f" | detected={item.detected_format}" if item.detected_format else "")
+                + (f" | destination={item.destination}" if item.destination else "")
+                for item in self.skipped_details
+            )
+        else:
+            lines.append("(none)")
+        report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return report_path
 
 
 
