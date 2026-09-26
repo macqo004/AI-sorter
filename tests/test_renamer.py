@@ -9,6 +9,7 @@ from ai_sorter.renamer import (
     RemoveCopySuffixRule,
     RemoveDuplicateImageExtensionRule,
     RemoveDuplicateSuffixRule,
+    RemoveKnownSourceNumericPrefixRule,
     RemoveLeadingNonAlphanumericRule,
     RemoveLeadingSingleCharUnderscoreRule,
     RemoveTrailingNonAlphanumericRule,
@@ -52,6 +53,21 @@ def test_remove_auto_conflict_suffix() -> None:
     assert rule.apply("sample__dup-25.jpg") == "sample.jpg"
     assert rule.apply("sample_xx.jpg") == "sample_xx.jpg"
     assert rule.apply("sample.jpg") == "sample.jpg"
+
+
+def test_remove_known_source_numeric_prefix() -> None:
+    rule = RemoveKnownSourceNumericPrefixRule()
+    assert rule.apply("9Cloud.us_0332-cośtam.jpg") == "cośtam.jpg"
+    assert rule.apply("9Cloud.us_0000_cośtam.jpg") == "cośtam.jpg"
+    assert rule.apply("9Cloud.us_1234-cośtam.jpg") == "cośtam.jpg"
+    assert rule.apply("9Cloud.us_9876.cośtam.jpg") == "cośtam.jpg"
+    assert rule.apply("9Cloud.us_1234 cośtam.jpg") == "cośtam.jpg"
+    assert rule.apply("9Cloud.us_123cośtam.jpg") == "9Cloud.us_123cośtam.jpg"
+    assert rule.apply("9Cloud.us_12345-cośtam.jpg") == "9Cloud.us_12345-cośtam.jpg"
+    assert rule.apply("9Cloud.us_1234cośtam.jpg") == "9Cloud.us_1234cośtam.jpg"
+    assert rule.apply("9Cloud.us_1234.jpg") == "9Cloud.us_1234.jpg"
+    assert rule.apply("9cloud.us_1234-cośtam.jpg") == "9cloud.us_1234-cośtam.jpg"
+    assert rule.apply("other_1234-cośtam.jpg") == "other_1234-cośtam.jpg"
 
 
 def test_remove_leading_single_char_underscore() -> None:
