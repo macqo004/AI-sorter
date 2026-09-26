@@ -13,6 +13,7 @@ DUPLICATE_IMAGE_EXTENSION_RE = re.compile(r"(?i)(\.(?:jpe?g|png|webp|gif|bmp|pns
 AUTO_CONFLICT_SUFFIX_RE = re.compile(r"(?i)_x(?:\d+)?$")
 LEGACY_CONFLICT_SUFFIX_RE = re.compile(r"(?i)__dup-(\d+)$")
 LEADING_SINGLE_CHAR_UNDERSCORE_RE = re.compile(r"^([^_\W])_")
+KNOWN_SOURCE_NUMERIC_PREFIX_RE = re.compile(r"^9Cloud\.us_\d{4}")
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pns"})
 MAX_FILENAME_LENGTH = 255
 AUTO_CONFLICT_SUFFIX = "_x"
@@ -91,6 +92,31 @@ class RemoveAutoConflictSuffixRule:
         return f"{transformed}{suffix}"
 
 
+
+@dataclass(frozen=True, slots=True)
+class RemoveKnownSourceNumericPrefixRule:
+    rule_id: str = "remove_known_source_numeric_prefix"
+    version: str = "1.0"
+
+    def apply(self, filename: str) -> str:
+        path = Path(filename)
+        stem = path.stem
+        suffix = path.suffix
+
+        match = KNOWN_SOURCE_NUMERIC_PREFIX_RE.match(stem)
+        if not match:
+            return filename
+
+        remainder = stem[match.end():]
+        if len(remainder) < 2 or remainder[0].isalnum():
+            return filename
+
+        transformed = remainder[1:]
+        if not transformed:
+            return filename
+        return f"{transformed}{suffix}"
+
+
 @dataclass(frozen=True, slots=True)
 class RemoveLeadingSingleCharUnderscoreRule:
     rule_id: str = "remove_leading_single_char_underscore"
@@ -164,6 +190,7 @@ DEFAULT_RULES: tuple[FilenameRule, ...] = (
     RemoveDuplicateSuffixRule(),
     RemoveCopySuffixRule(),
     RemoveAutoConflictSuffixRule(),
+    RemoveKnownSourceNumericPrefixRule(),
     RemoveLeadingSingleCharUnderscoreRule(),
     RemoveLeadingNonAlphanumericRule(),
     RemoveTrailingNonAlphanumericRule(),
