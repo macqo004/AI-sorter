@@ -26,6 +26,10 @@ class ScannerStore:
             "CREATE TEMP TABLE IF NOT EXISTS scanner_seen_paths (absolute_path TEXT PRIMARY KEY)"
         )
         self.connection.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS scanner_seen_locations ("
+            "absolute_path TEXT PRIMARY KEY, sha512 TEXT NOT NULL)"
+        )
+        self.connection.execute(
             "CREATE TEMP TABLE IF NOT EXISTS scanner_clear_shas (sha512 TEXT PRIMARY KEY)"
         )
         self.connection.commit()
@@ -38,6 +42,7 @@ class ScannerStore:
 
     def begin_scan(self) -> None:
         self.connection.execute("DELETE FROM scanner_seen_paths")
+        self.connection.execute("DELETE FROM scanner_seen_locations")
         self.connection.commit()
 
     def lookup_locations(self, absolute_paths: list[str]) -> dict[str, FileLocationRecord]:
@@ -68,7 +73,7 @@ class ScannerStore:
             raise DatabaseError("Nie udało się sprawdzić istniejących lokalizacji plików w bazie danych.") from exc
         return result
 
-    def touch_batch(self, items: list[tuple[str, int, datetime]], execution_id: int) -> None:
+    def touch_batch(self, items: list[tuple[str, int, datetime, str]], execution_id: int) -> None:
         if not items:
             return
         try:
@@ -78,13 +83,20 @@ class ScannerStore:
                     UPDATE file_location
                     SET file_size = ?, modified_at = ?, location_status = 'ACTIVE',
                         last_seen_execution_id = ?
-                    WHERE absolute_path = ?
+                    WHERE absolute_path = ? AND sha512 = ?
                     """,
-                    [(size, self._windows_time(modified_at), execution_id, path) for path, size, modified_at in items],
+                    [
+                        (size, self._windows_time(modified_at), execution_id, path, sha512.lower())
+                        for path, size, modified_at, sha512 in items
+                    ],
                 )
                 connection.executemany(
                     "INSERT OR IGNORE INTO scanner_seen_paths (absolute_path) VALUES (?)",
-                    [(path,) for path, _, _ in items],
+                    [(path,) for path, _, _, _ in items],
+                )
+                connection.executemany(
+                    "INSERT OR REPLACE INTO scanner_seen_locations (absolute_path, sha512) VALUES (?, ?)",
+                    [(path, sha512.lower()) for path, _, _, sha512 in items],
                 )
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać bieżącego stanu lokalizacji plików.") from exc
@@ -128,6 +140,10 @@ class ScannerStore:
                 connection.executemany(
                     "INSERT OR IGNORE INTO scanner_seen_paths (absolute_path) VALUES (?)",
                     [(record.absolute_path,) for record in locations],
+                )
+                connection.executemany(
+                    "INSERT OR REPLACE INTO scanner_seen_locations (absolute_path, sha512) VALUES (?, ?)",
+                    [(record.absolute_path, record.sha512.lower()) for record in locations],
                 )
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać partii wyników skanowania w bazie danych.") from exc
@@ -198,9 +214,14 @@ class ScannerStore:
                     SET location_status = 'MISSING'
                     WHERE location_status = 'ACTIVE'
                       AND (absolute_path = ? OR absolute_path LIKE ?)
-                      AND (last_seen_execution_id IS NULL OR last_seen_execution_id <> ?)
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM scanner_seen_locations AS seen
+                          WHERE seen.absolute_path = file_location.absolute_path
+                            AND seen.sha512 = file_location.sha512
+                      )
                     """,
-                    (root_text, pattern, execution_id),
+                    (root_text, pattern),
                 )
                 return max(0, cursor.rowcount or 0)
         except Exception as exc:
