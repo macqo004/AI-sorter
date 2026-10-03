@@ -32,6 +32,7 @@ class RenamerWorker(QObject):
         self.recursive = recursive
         self.engine = RenamerEngine()
         self.proposals: list[RenameProposal] = []
+        self._prepared_rename_locations = {}
 
     def _discover_files(self) -> tuple[list[Path], set[str]]:
         """Collect supported files and cache all existing paths for fast conflict planning."""
@@ -168,26 +169,9 @@ class RenamerWorker(QObject):
             self.failed.emit(f"Nie udało się przygotować planu Renamera: {exc}")
 
     def _validate_database_before_rename(self, proposals: list[RenameProposal]) -> None:
-        """Validate active source identity before changing the filesystem."""
-        if not proposals:
-            return
-        database = self.database
-        if database.connection is None:
-            raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
-
-        with database.connection:
-            for proposal in proposals:
-                source_text = str(proposal.source.resolve())
-                rows = database.connection.execute(
-                    "SELECT DISTINCT sha512 FROM file_location "
-                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
-                    (source_text,),
-                ).fetchall()
-                if len(rows) > 1:
-                    raise DatabaseError(
-                        "Nie można jednoznacznie ustalić SHA-512 dla źródłowej lokalizacji: "
-                        f"{source_text}"
-                    )
+        """Capture the active DB identity for every tracked rename before touching the filesystem."""
+        paths = [(proposal.source, proposal.destination) for proposal in proposals]
+        self._prepared_rename_locations = ScannerStore(self.database).prepare_renamed_locations(paths)
 
     def _execute_with_progress(self) -> list[RenameProposal]:
         """Execute the already validated rename plan while reporting completed renames."""
@@ -235,83 +219,11 @@ class RenamerWorker(QObject):
     def _reconcile_database_after_rename(
         self, paths: list[tuple[Path, Path]]
     ) -> tuple[int, int]:
-        """Synchronize DB paths after the filesystem rename."""
-        if not paths:
-            return 0, 0
-        database = self.database
-        if database.connection is None:
-            raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
-
-        reconciled_conflicts = 0
-        updated = 0
-        with database.transaction() as connection:
-            for source, destination in paths:
-                source_text = str(source.resolve())
-                destination_text = str(destination.resolve())
-                source_rows = connection.execute(
-                    "SELECT DISTINCT sha512 FROM file_location "
-                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
-                    (source_text,),
-                ).fetchall()
-                destination_rows = connection.execute(
-                    "SELECT sha512 FROM file_location "
-                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
-                    (destination_text,),
-                ).fetchall()
-
-                if source_rows:
-                    source_shas = {str(row["sha512"]).lower() for row in source_rows}
-                    if len(source_shas) != 1:
-                        raise DatabaseError(
-                            "Nie można jednoznacznie ustalić SHA-512 dla źródłowej lokalizacji: "
-                            f"{source_text}"
-                        )
-                    source_sha = next(iter(source_shas))
-                elif destination_rows:
-                    destination_shas = {str(row["sha512"]).lower() for row in destination_rows}
-                    if len(destination_shas) == 1:
-                        updated += 1
-                        continue
-                    raise DatabaseError(
-                        "Nie można jednoznacznie ustalić SHA-512 dla docelowej lokalizacji: "
-                        f"{destination_text}"
-                    )
-                else:
-                    continue
-
-                same_sha_destination = any(
-                    str(row["sha512"]).lower() == source_sha for row in destination_rows
-                )
-                stale_destination_rows = [
-                    row
-                    for row in destination_rows
-                    if str(row["sha512"]).lower() != source_sha
-                ]
-
-                if stale_destination_rows:
-                    connection.execute(
-                        "DELETE FROM file_location WHERE absolute_path = ? AND sha512 <> ?",
-                        (destination_text, source_sha),
-                    )
-                    reconciled_conflicts += len(stale_destination_rows)
-
-                if same_sha_destination:
-                    connection.execute(
-                        "DELETE FROM file_location WHERE absolute_path = ?",
-                        (source_text,),
-                    )
-                    connection.execute(
-                        "UPDATE file_location SET location_status = 'ACTIVE' WHERE absolute_path = ? AND sha512 = ?",
-                        (destination_text, source_sha),
-                    )
-                else:
-                    connection.execute(
-                        "UPDATE file_location SET absolute_path = ?, location_status = 'ACTIVE' WHERE absolute_path = ? AND sha512 = ?",
-                        (destination_text, source_text, source_sha),
-                    )
-                updated += 1
-
-        return updated, reconciled_conflicts
+        """Synchronize successful filesystem renames through the shared ScannerStore."""
+        return ScannerStore(self.database).update_renamed_locations(
+            paths,
+            prepared=self._prepared_rename_locations,
+        )
 
     @Slot()
     def execute(self) -> None:
