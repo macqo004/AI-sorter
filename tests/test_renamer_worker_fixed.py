@@ -4,12 +4,48 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_sorter.core.database import Database
+from ai_sorter.core.database import Database, DatabaseError
 from ai_sorter.core.models import FileLocationRecord, FileRecord
+from ai_sorter.renamer import RenameProposal
 from ai_sorter.gui.renamer_worker_fixed import RenamerWorker
 
 
 class RenamerWorkerDatabaseTests(unittest.TestCase):
+    def test_ambiguous_active_source_sha_is_rejected_before_filesystem_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "070_x19.jpg"
+            destination = root / "070.jpg"
+            source.write_bytes(b"test")
+
+            first_sha = "a" * 128
+            second_sha = "b" * 128
+            db = Database(root / "project.db")
+            db.open()
+            try:
+                db.upsert_file(FileRecord(first_sha, 4))
+                db.upsert_file(FileRecord(second_sha, 4))
+                db.upsert_file_location(
+                    FileLocationRecord(first_sha, str(source.resolve()), 4, location_status="ACTIVE")
+                )
+                db.upsert_file_location(
+                    FileLocationRecord(second_sha, str(source.resolve()), 4, location_status="ACTIVE")
+                )
+
+                worker = RenamerWorker(db, root)
+                worker.proposals = [
+                    RenameProposal(source, destination, "test", True, "test")
+                ]
+
+                with self.assertRaises(DatabaseError):
+                    worker._execute_with_progress()
+
+                self.assertTrue(source.exists())
+                self.assertFalse(destination.exists())
+            finally:
+                db.close()
+
+
     def test_reconcile_ignores_stale_missing_sha_at_source_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
