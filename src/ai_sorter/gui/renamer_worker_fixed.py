@@ -226,11 +226,13 @@ class RenamerWorker(QObject):
                 source_text = str(source.resolve())
                 destination_text = str(destination.resolve())
                 source_rows = connection.execute(
-                    "SELECT DISTINCT sha512 FROM file_location WHERE absolute_path = ?",
+                    "SELECT DISTINCT sha512 FROM file_location "
+                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
                     (source_text,),
                 ).fetchall()
                 destination_rows = connection.execute(
-                    "SELECT sha512 FROM file_location WHERE absolute_path = ?",
+                    "SELECT sha512 FROM file_location "
+                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
                     (destination_text,),
                 ).fetchall()
 
