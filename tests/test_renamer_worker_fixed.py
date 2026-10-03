@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,7 +88,7 @@ class RenamerWorkerDatabaseTests(unittest.TestCase):
                 ).fetchone()
                 self.assertIsNotNone(row)
                 self.assertEqual(row["location_status"], "ACTIVE")
-                self.assertEqual(row["sha512"], "b7f9f53bba4c0e0b4b2dcf679f3fbbf31d07c8a7bc09d6f1ce8a5d3c3d7cc2f7f0c6c37a3c5b6c0a4f6a0d6a1f2a8f3d5d1b8e0f0e3e1e4b2c9f7d5d8a6e")
+                self.assertEqual(row["sha512"], hashlib.sha512(b"rename-and-scan-integration").hexdigest())
             finally:
                 db.close()
 
