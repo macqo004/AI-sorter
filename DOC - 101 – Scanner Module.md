@@ -8,7 +8,7 @@
 
 **Module:** Scanner
 
-**Version:** 2.1
+**Version:** 2.2
 
 **Status:** Draft
 
@@ -231,6 +231,20 @@ If the metadata indicates a possible change, or if the file is new and no valid 
 A successful content change results in a new SHA512 identity according to DOC-012 rather than overwriting the old binary identity.
 
 Metadata-based optimization is a performance optimization, not a replacement for the SHA512 identity model.
+
+For every successfully completed scan, Scanner establishes this filesystem-state invariant within the scanned root:
+
+```text
+one physical path
+    → at most one ACTIVE SHA512 identity
+
+all other retained identities for that path
+    → MISSING
+```
+
+A path with multiple ACTIVE SHA512 identities is treated as an inconsistent database state. Scanner must not resolve that ambiguity by selecting one stored identity arbitrarily; it must hash the currently discovered file and reconcile the stored locations from the verified result.
+
+Other modules consuming current filesystem state should operate on `ACTIVE` locations only. `MISSING` locations are retained history/maintenance state and are not current processing inputs.
 
 ---
 
@@ -524,6 +538,7 @@ Scanner is considered compliant when it can:
 * create valid file identities using SHA512;
 * reactivate an existing retained archived record when the same unchanged SHA512 is rediscovered;
 * detect new, moved, renamed, modified and missing files where supported by the available filesystem information;
+* enforce at most one ACTIVE SHA512 identity per physical path after a successful scan;
 * preserve identity across rename and move;
 * create a new identity when binary content changes;
 * update the database incrementally;
