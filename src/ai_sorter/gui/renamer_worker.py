@@ -49,7 +49,7 @@ class RenamerWorker(QObject):
         try:
             started_at = time.perf_counter()
             executed = self.engine.execute(self.proposals)
-            db_updated, _db_reconciled_conflicts = ScannerStore(self.database).update_renamed_locations(
+            db_updated = ScannerStore(self.database).update_renamed_locations(
                 [(proposal.source, proposal.destination) for proposal in executed]
             )
             elapsed = time.perf_counter() - started_at
