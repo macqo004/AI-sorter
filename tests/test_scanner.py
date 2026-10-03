@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 
 from ai_sorter.core.database import Database
+from ai_sorter.core.models import FileLocationRecord, FileRecord
 from ai_sorter.modules.scanner import Scanner
 
 
@@ -34,6 +36,57 @@ class ScannerTests(unittest.TestCase):
                 self.assertEqual(status.location_count, 2)
             finally:
                 db.close()
+
+    def test_scan_repairs_multiple_active_identities_for_one_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            file_path = root / "ambiguous.jpg"
+            payload = b"scanner-active-identity-repair"
+            file_path.write_bytes(payload)
+
+            actual_sha = hashlib.sha512(payload).hexdigest()
+            stale_sha = "b" * 128
+            db = Database(root / "project.db")
+            db.open()
+            try:
+                candidate = next(Scanner(db, worker_count=1)._discover(root))
+                db.upsert_file(FileRecord(actual_sha, candidate.size, modified_at=candidate.modified_at))
+                db.upsert_file(FileRecord(stale_sha, candidate.size, modified_at=candidate.modified_at))
+                db.upsert_file_location(
+                    FileLocationRecord(
+                        actual_sha,
+                        str(file_path.resolve()),
+                        candidate.size,
+                        candidate.modified_at,
+                        "ACTIVE",
+                    )
+                )
+                db.upsert_file_location(
+                    FileLocationRecord(
+                        stale_sha,
+                        str(file_path.resolve()),
+                        candidate.size,
+                        candidate.modified_at,
+                        "ACTIVE",
+                    )
+                )
+
+                summary = Scanner(db, worker_count=1).scan(root)
+                self.assertEqual(summary.failed, 0)
+                self.assertEqual(summary.scanned, 1)
+
+                rows = db.connection.execute(
+                    "SELECT sha512, location_status FROM file_location "
+                    "WHERE absolute_path = ? ORDER BY sha512",
+                    (str(file_path.resolve()),),
+                ).fetchall()
+                self.assertEqual(
+                    [(row["sha512"], row["location_status"]) for row in rows],
+                    [(actual_sha, "ACTIVE"), (stale_sha, "MISSING")],
+                )
+            finally:
+                db.close()
+
 
     def test_second_scan_reuses_metadata_without_new_file_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
