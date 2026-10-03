@@ -167,10 +167,33 @@ class RenamerWorker(QObject):
         except Exception as exc:
             self.failed.emit(f"Nie udało się przygotować planu Renamera: {exc}")
 
+    def _validate_database_before_rename(self, proposals: list[RenameProposal]) -> None:
+        """Validate active source identity before changing the filesystem."""
+        if not proposals:
+            return
+        database = self.database
+        if database.connection is None:
+            raise DatabaseError("Baza danych projektu nie jest obecnie połączona.")
+
+        with database.connection:
+            for proposal in proposals:
+                source_text = str(proposal.source.resolve())
+                rows = database.connection.execute(
+                    "SELECT DISTINCT sha512 FROM file_location "
+                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
+                    (source_text,),
+                ).fetchall()
+                if len(rows) > 1:
+                    raise DatabaseError(
+                        "Nie można jednoznacznie ustalić SHA-512 dla źródłowej lokalizacji: "
+                        f"{source_text}"
+                    )
+
     def _execute_with_progress(self) -> list[RenameProposal]:
         """Execute the already validated rename plan while reporting completed renames."""
         proposals = [proposal for proposal in self.proposals if proposal.changed]
         self.engine._validate_plan(proposals)
+        self._validate_database_before_rename(proposals)
         total = len(proposals)
         for proposal in proposals:
             if not proposal.source.exists():
