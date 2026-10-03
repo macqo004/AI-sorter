@@ -213,8 +213,17 @@ class ScannerStore:
         self,
         paths: list[tuple[Path, Path]],
         prepared: dict[str, FileLocationRecord] | None = None,
+    ) -> int:
+        """Update DB paths after successful filesystem renames."""
+        updated, _ = self.update_renamed_locations_with_stats(paths, prepared=prepared)
+        return updated
+
+    def update_renamed_locations_with_stats(
+        self,
+        paths: list[tuple[Path, Path]],
+        prepared: dict[str, FileLocationRecord] | None = None,
     ) -> tuple[int, int]:
-        """Update DB paths after successful filesystem renames using captured SHA-512 identities."""
+        """Update DB paths and report stale destination conflicts."""
         if not paths:
             return 0, 0
 
@@ -230,7 +239,7 @@ class ScannerStore:
 
                 # Remove all ACTIVE source rows first. This makes DB-side moves
                 # safe even when one rename destination is another rename source.
-                for source, _destination, record in tracked:
+                for _source, _destination, record in tracked:
                     if record is None:
                         continue
                     connection.execute(
