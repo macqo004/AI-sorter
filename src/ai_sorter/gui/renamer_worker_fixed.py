@@ -220,7 +220,7 @@ class RenamerWorker(QObject):
         self, paths: list[tuple[Path, Path]]
     ) -> tuple[int, int]:
         """Synchronize successful filesystem renames through the shared ScannerStore."""
-        return ScannerStore(self.database).update_renamed_locations(
+        return ScannerStore(self.database).update_renamed_locations_with_stats(
             paths,
             prepared=self._prepared_rename_locations,
         )
