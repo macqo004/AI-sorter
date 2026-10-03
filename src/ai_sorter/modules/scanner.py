@@ -68,7 +68,7 @@ class Scanner:
     """Discover supported files and synchronize their filesystem identity into SQLite."""
 
     module_id = "scanner"
-    module_version = "0.4.1"
+    module_version = "0.4.2"
 
     def __init__(
         self,
@@ -115,7 +115,7 @@ class Scanner:
         pending: dict[Future[_HashedFile], _FileCandidate] = {}
         save_batch_files: list[FileRecord] = []
         save_batch_locations: list[FileLocationRecord] = []
-        touch_batch: list[tuple[str, int, datetime]] = []
+        touch_batch: list[tuple[str, int, datetime, str]] = []
         current_discovery_path: str | None = None
         last_completed_path: str | None = None
 
@@ -168,7 +168,9 @@ class Scanner:
             for candidate in candidates:
                 current_discovery_path = str(candidate.path)
                 if self._can_reuse_hash(known.get(str(candidate.path)), candidate):
-                    touch_batch.append((str(candidate.path), candidate.size, candidate.modified_at))
+                    touch_batch.append((
+                        str(candidate.path), candidate.size, candidate.modified_at, known[str(candidate.path)].sha512
+                    ))
                     skipped += 1
                     processed += 1
                     if len(touch_batch) >= self.db_batch_size:
