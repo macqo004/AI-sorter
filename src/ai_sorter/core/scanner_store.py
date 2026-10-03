@@ -59,16 +59,26 @@ class ScannerStore:
                     SELECT sha512, absolute_path, file_size, modified_at, location_status,
                            last_seen_execution_id
                     FROM file_location
-                    WHERE absolute_path IN ({placeholders})
+                    WHERE location_status = 'ACTIVE'
+                      AND absolute_path IN ({placeholders})
                     """,
                     batch,
                 ).fetchall()
+
+                rows_by_path: dict[str, list[FileLocationRecord]] = {}
                 for row in rows:
-                    result[row["absolute_path"]] = FileLocationRecord(
+                    record = FileLocationRecord(
                         sha512=row["sha512"], absolute_path=row["absolute_path"], file_size=row["file_size"],
                         modified_at=self._parse_datetime(row["modified_at"]),
                         location_status=row["location_status"], last_seen_execution_id=row["last_seen_execution_id"],
                     )
+                    rows_by_path.setdefault(record.absolute_path, []).append(record)
+
+                # A path with multiple ACTIVE identities is already inconsistent.
+                # Do not choose one arbitrarily; force Scanner to rehash the file.
+                for path, records in rows_by_path.items():
+                    if len(records) == 1:
+                        result[path] = records[0]
         except Exception as exc:
             raise DatabaseError("Nie udało się sprawdzić istniejących lokalizacji plików w bazie danych.") from exc
         return result
