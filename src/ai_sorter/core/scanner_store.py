@@ -158,54 +158,137 @@ class ScannerStore:
         except Exception as exc:
             raise DatabaseError("Nie udało się zapisać partii wyników skanowania w bazie danych.") from exc
 
-    def update_renamed_locations(self, paths: list[tuple[Path, Path]]) -> int:
-        """Update DB paths after successful filesystem renames, preserving SHA-512 identity."""
+    def prepare_renamed_locations(
+        self, paths: list[tuple[Path, Path]]
+    ) -> dict[str, FileLocationRecord]:
+        """Capture one unambiguous ACTIVE DB identity for each rename source."""
         if not paths:
-            return 0
+            return {}
+        source_paths = list(dict.fromkeys(str(source.resolve()) for source, _ in paths))
+        result: dict[str, FileLocationRecord] = {}
         try:
-            with self.database.transaction() as connection:
-                updated = 0
-                for source, destination in paths:
-                    source_text = str(source.resolve())
-                    destination_text = str(destination.resolve())
-                    row = connection.execute(
-                        "SELECT sha512 FROM file_location WHERE absolute_path = ?",
-                        (source_text,),
-                    ).fetchone()
-                    if row is None:
-                        continue
-                    source_sha = str(row["sha512"]).lower()
-                    collision = connection.execute(
-                        "SELECT sha512, location_status FROM file_location WHERE absolute_path = ?",
-                        (destination_text,),
-                    ).fetchone()
-                    if collision is not None:
-                        collision_sha = str(collision["sha512"]).lower()
-                        if collision_sha == source_sha:
-                            connection.execute(
-                                "DELETE FROM file_location WHERE absolute_path = ?",
-                                (source_text,),
-                            )
-                            connection.execute(
-                                "UPDATE file_location SET location_status = 'ACTIVE' WHERE absolute_path = ?",
-                                (destination_text,),
-                            )
-                            updated += 1
-                            continue
-                        connection.execute(
-                            "DELETE FROM file_location WHERE absolute_path = ?",
-                            (destination_text,),
-                        )
-                    connection.execute(
-                        "UPDATE file_location SET absolute_path = ?, location_status = 'ACTIVE' WHERE absolute_path = ?",
-                        (destination_text, source_text),
+            for offset in range(0, len(source_paths), self.LOOKUP_BATCH_SIZE):
+                batch = source_paths[offset : offset + self.LOOKUP_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                rows = self.connection.execute(
+                    f"""
+                    SELECT sha512, absolute_path, file_size, modified_at, location_status,
+                           last_seen_execution_id
+                    FROM file_location
+                    WHERE location_status = 'ACTIVE'
+                      AND absolute_path IN ({placeholders})
+                    """,
+                    batch,
+                ).fetchall()
+                grouped: dict[str, list[FileLocationRecord]] = {}
+                for row in rows:
+                    record = FileLocationRecord(
+                        sha512=str(row["sha512"]).lower(),
+                        absolute_path=row["absolute_path"],
+                        file_size=row["file_size"],
+                        modified_at=self._parse_datetime(row["modified_at"]),
+                        location_status=row["location_status"],
+                        last_seen_execution_id=row["last_seen_execution_id"],
                     )
-                    updated += 1
-                return updated
+                    grouped.setdefault(record.absolute_path, []).append(record)
+
+                for source_text in batch:
+                    records = grouped.get(source_text, [])
+                    if len(records) > 1:
+                        raise DatabaseError(
+                            "Nie można jednoznacznie ustalić SHA-512 dla źródłowej lokalizacji: "
+                            f"{source_text}"
+                        )
+                    if records:
+                        result[source_text] = records[0]
+            return result
         except DatabaseError:
             raise
         except Exception as exc:
-            raise DatabaseError("Nie udało się zaktualizować ścieżek Renamera w bazie danych.") from exc
+            raise DatabaseError(
+                "Nie udało się przygotować synchronizacji ścieżek Renamera z bazą danych."
+            ) from exc
+
+    def update_renamed_locations(
+        self,
+        paths: list[tuple[Path, Path]],
+        prepared: dict[str, FileLocationRecord] | None = None,
+    ) -> tuple[int, int]:
+        """Update DB paths after successful filesystem renames using captured SHA-512 identities."""
+        if not paths:
+            return 0, 0
+
+        prepared = prepared if prepared is not None else self.prepare_renamed_locations(paths)
+        tracked = [
+            (source, destination, prepared.get(str(source.resolve())))
+            for source, destination in paths
+        ]
+        try:
+            with self.database.transaction() as connection:
+                updated = 0
+                reconciled_conflicts = 0
+
+                # Remove all ACTIVE source rows first. This makes DB-side moves
+                # safe even when one rename destination is another rename source.
+                for source, _destination, record in tracked:
+                    if record is None:
+                        continue
+                    connection.execute(
+                        "DELETE FROM file_location "
+                        "WHERE absolute_path = ? AND sha512 = ? AND location_status = 'ACTIVE'",
+                        (record.absolute_path, record.sha512),
+                    )
+
+                for _source, destination, record in tracked:
+                    if record is None:
+                        continue
+                    destination_text = str(destination.resolve())
+                    destination_rows = connection.execute(
+                        "SELECT sha512 FROM file_location "
+                        "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
+                        (destination_text,),
+                    ).fetchall()
+
+                    stale_destination_rows = [
+                        row for row in destination_rows
+                        if str(row["sha512"]).lower() != record.sha512
+                    ]
+                    if stale_destination_rows:
+                        connection.execute(
+                            "DELETE FROM file_location "
+                            "WHERE absolute_path = ? AND location_status = 'ACTIVE' AND sha512 <> ?",
+                            (destination_text, record.sha512),
+                        )
+                        reconciled_conflicts += len(stale_destination_rows)
+
+                    connection.execute(
+                        """
+                        INSERT INTO file_location
+                            (sha512, absolute_path, file_size, modified_at, location_status, last_seen_execution_id)
+                        VALUES (?, ?, ?, ?, 'ACTIVE', ?)
+                        ON CONFLICT(sha512, absolute_path) DO UPDATE SET
+                            file_size = excluded.file_size,
+                            modified_at = excluded.modified_at,
+                            location_status = 'ACTIVE',
+                            last_seen_execution_id = excluded.last_seen_execution_id
+                        """,
+                        (
+                            record.sha512,
+                            destination_text,
+                            record.file_size,
+                            self._windows_time(record.modified_at),
+                            record.last_seen_execution_id,
+                        ),
+                    )
+                    updated += 1
+
+                return updated, reconciled_conflicts
+        except DatabaseError:
+            raise
+        except Exception as exc:
+            raise DatabaseError(
+                "Nie udało się zaktualizować ścieżek Renamera w bazie danych."
+            ) from exc
 
     def mark_missing_under_root(self, root: Path, execution_id: int) -> int:
         """Mark active locations not seen during this scan as missing under *root*.
