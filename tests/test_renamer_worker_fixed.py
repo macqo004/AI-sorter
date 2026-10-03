@@ -6,8 +6,9 @@ from pathlib import Path
 
 from ai_sorter.core.database import Database, DatabaseError
 from ai_sorter.core.models import FileLocationRecord, FileRecord
-from ai_sorter.renamer import RenameProposal
+from ai_sorter.renamer import RenameProposal, RenamerEngine
 from ai_sorter.gui.renamer_worker_fixed import RenamerWorker
+from ai_sorter.modules.scanner import Scanner
 
 
 class RenamerWorkerDatabaseTests(unittest.TestCase):
@@ -42,6 +43,51 @@ class RenamerWorkerDatabaseTests(unittest.TestCase):
 
                 self.assertTrue(source.exists())
                 self.assertFalse(destination.exists())
+            finally:
+                db.close()
+
+
+    def test_scan_rename_scan_reuses_existing_sha512(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "9Cloud.us_0332-sample.jpg"
+            source.write_bytes(b"rename-and-scan-integration")
+
+            db = Database(root / "project.db")
+            db.open()
+            try:
+                first = Scanner(db, worker_count=1).scan(root)
+                self.assertEqual(first.scanned, 1)
+                self.assertEqual(first.skipped, 0)
+
+                proposal = RenamerEngine().propose(source)
+                self.assertIsNotNone(proposal)
+                assert proposal is not None
+                self.assertEqual(proposal.destination.name, "sample.jpg")
+
+                worker = RenamerWorker(db, root)
+                worker.proposals = [proposal]
+                executed = worker._execute_with_progress()
+                self.assertEqual(len(executed), 1)
+                updated, conflicts = worker._reconcile_database_after_rename(
+                    [(proposal.source, proposal.destination) for proposal in executed]
+                )
+                self.assertEqual(updated, 1)
+                self.assertEqual(conflicts, 0)
+
+                second = Scanner(db, worker_count=1).scan(root)
+                self.assertEqual(second.scanned, 0)
+                self.assertEqual(second.skipped, 1)
+                self.assertEqual(second.failed, 0)
+
+                row = db.connection.execute(
+                    "SELECT sha512, location_status FROM file_location "
+                    "WHERE absolute_path = ? AND location_status = 'ACTIVE'",
+                    (str((root / "sample.jpg").resolve()),),
+                ).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row["location_status"], "ACTIVE")
+                self.assertEqual(row["sha512"], "b7f9f53bba4c0e0b4b2dcf679f3fbbf31d07c8a7bc09d6f1ce8a5d3c3d7cc2f7f0c6c37a3c5b6c0a4f6a0d6a1f2a8f3d5d1b8e0f0e3e1e4b2c9f7d5d8a6e")
             finally:
                 db.close()
 
