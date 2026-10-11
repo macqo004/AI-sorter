@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Files moved: {summary.moved:,}")
         print(f"Database locations updated: {summary.database_updated:,}")
         print(f"Database conflicts reconciled: {summary.database_conflicts_reconciled:,}")
-        print(f"Skipped because destination exists: {summary.skipped_existing:,}")
+        print(f"Skipped because of destination conflicts: {summary.skipped_existing:,}")
         print(f"Unreadable images: {summary.unreadable:,}")
         print(f"Other errors: {summary.failed:,}")
         print(f"Cancelled: {summary.cancelled}")
