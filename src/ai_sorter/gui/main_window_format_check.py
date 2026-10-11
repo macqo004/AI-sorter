@@ -91,6 +91,7 @@ class MainWindow(BaseMainWindow):
             "format_worker",
             "extension_worker",
             "renamer_worker",
+            "dimension_group_worker",
         ):
             worker = getattr(self, attribute, None)
             if worker is not None and callable(getattr(worker, "cancel", None)):
@@ -109,6 +110,7 @@ class MainWindow(BaseMainWindow):
                 "format_worker",
                 "extension_worker",
                 "renamer_worker",
+                "dimension_group_worker",
                 "import_worker",
                 "maintenance_worker",
             )
