@@ -272,6 +272,24 @@ class DimensionGrouper:
                 if not item.source.is_file():
                     skipped += 1
                     continue
+                if item.destination.exists():
+                    skipped += 1
+                    continue
+
+                source_key = str(item.source.resolve())
+                if source_key not in prepared:
+                    # With no known source SHA, do not move into a destination
+                    # that still has an ACTIVE database identity but no disk file.
+                    destination_key = str(item.destination.resolve())
+                    stale_row = store.connection.execute(
+                        "SELECT 1 FROM file_location "
+                        "WHERE absolute_path = ? AND location_status = 'ACTIVE' LIMIT 1",
+                        (destination_key,),
+                    ).fetchone()
+                    if stale_row is not None:
+                        skipped += 1
+                        continue
+
                 item.destination.parent.mkdir(parents=True, exist_ok=True)
                 if item.destination.exists():
                     skipped += 1
@@ -282,7 +300,7 @@ class DimensionGrouper:
                 failed_moves += 1
 
         if not executed:
-            return 0, skipped, failed_moves, 0, 0
+            return 0, skipped, identity_failures + failed_moves, 0, 0
 
         prepared_executed = {
             str(source.resolve()): prepared[str(source.resolve())]
