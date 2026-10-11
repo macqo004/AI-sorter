@@ -228,7 +228,7 @@ class MainWindow(BaseMainWindow):
             f"Files moved: {summary.moved:,}\n"
             f"Database locations updated: {summary.database_updated:,}\n"
             f"Database conflicts reconciled: {summary.database_conflicts_reconciled:,}\n"
-            f"Skipped (existing destination): {summary.skipped_existing:,}\n"
+            f"Skipped (destination conflicts): {summary.skipped_existing:,}\n"
             f"Unreadable images: {summary.unreadable:,}\n"
             f"Other errors: {summary.failed:,}\n"
             f"Elapsed: {self._format_duration(summary.elapsed_seconds)}"
