@@ -246,22 +246,22 @@ class DimensionGrouper:
             return 0, 0, 0, 0, 0
 
         paths = [(item.source, item.destination) for item in candidates]
+        identity_failures = 0
         try:
             prepared = store.prepare_renamed_locations(paths)
         except DatabaseError:
             # Retry individually so one ambiguous identity does not block unrelated files.
             prepared = {}
             safe_candidates: list[_Candidate] = []
-            failed = 0
             for item in candidates:
                 try:
                     prepared.update(store.prepare_renamed_locations([(item.source, item.destination)]))
                     safe_candidates.append(item)
                 except DatabaseError:
-                    failed += 1
+                    identity_failures += 1
             candidates = safe_candidates
             if not candidates:
-                return 0, 0, failed, 0, 0
+                return 0, 0, identity_failures, 0, 0
 
         executed: list[tuple[Path, Path]] = []
         skipped = failed_moves = 0
@@ -305,7 +305,7 @@ class DimensionGrouper:
                     pass
             raise
 
-        return len(executed), skipped, failed_moves, database_updated, conflicts
+        return len(executed), skipped, identity_failures + failed_moves, database_updated, conflicts
 
     def _iter_sources(self) -> Iterable[Path]:
         """Yield supported files, skipping existing root-level dimension folders."""
