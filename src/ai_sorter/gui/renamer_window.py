@@ -159,7 +159,7 @@ class MainWindow(BaseMainWindow):
 
         if plan.planned_moves == 0:
             details = (
-                "No files need moving.\n\n"
+                "No safe moves found.\n\n"
                 f"Images inspected: {plan.considered:,}\n"
                 f"Unreadable images: {plan.unreadable:,}\n"
                 f"Destination name conflicts: {plan.destination_conflicts:,}"
