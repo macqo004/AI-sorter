@@ -16,37 +16,47 @@ class DimensionGrouperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "sample.png"
+            nested = root / "nested"
+            nested.mkdir()
+            second_source = nested / "second.png"
             Image.new("RGB", (800, 870), (220, 30, 40)).save(source)
+            Image.new("RGB", (800, 870), (10, 20, 30)).save(second_source)
 
             db = Database(root / "project.db")
             db.open()
             try:
                 before = Scanner(db, worker_count=1).scan(root)
-                self.assertEqual(before.scanned, 1)
+                self.assertEqual(before.scanned, 2)
                 self.assertEqual(before.failed, 0)
 
                 grouper = DimensionGrouper(db, root, batch_size=8)
                 plan = grouper.plan()
-                self.assertEqual(plan.considered, 1)
-                self.assertEqual(plan.planned_moves, 1)
-                self.assertEqual(plan.by_dimension, {"800x870": 1})
+                self.assertEqual(plan.considered, 2)
+                self.assertEqual(plan.planned_moves, 2)
+                self.assertEqual(plan.by_dimension, {"800x870": 2})
 
                 summary = grouper.execute(plan)
                 destination = root / "800x870" / "sample.png"
-                self.assertEqual(summary.moved, 1)
-                self.assertEqual(summary.database_updated, 1)
+                second_destination = root / "800x870" / "second.png"
+                self.assertEqual(summary.moved, 2)
+                self.assertEqual(summary.database_updated, 2)
                 self.assertTrue(destination.is_file())
+                self.assertTrue(second_destination.is_file())
                 self.assertFalse(source.exists())
+                self.assertFalse(second_source.exists())
 
                 active_rows = db.connection.execute(
                     "SELECT sha512, absolute_path FROM file_location WHERE location_status = 'ACTIVE'"
                 ).fetchall()
-                self.assertEqual(len(active_rows), 1)
-                self.assertEqual(active_rows[0]["absolute_path"], str(destination.resolve()))
+                self.assertEqual(len(active_rows), 2)
+                self.assertEqual(
+                    {row["absolute_path"] for row in active_rows},
+                    {str(destination.resolve()), str(second_destination.resolve())},
+                )
 
                 after = Scanner(db, worker_count=1).scan(root)
                 self.assertEqual(after.scanned, 0)
-                self.assertEqual(after.skipped, 1)
+                self.assertEqual(after.skipped, 2)
                 self.assertEqual(after.failed, 0)
 
                 second_plan = grouper.plan()
