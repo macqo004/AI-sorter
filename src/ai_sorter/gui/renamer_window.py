@@ -10,6 +10,13 @@ from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QMessageBox, QPushButton
 
 from ..modules.scanner import SUPPORTED_EXTENSIONS
+from ..modules.dimension_grouper import (
+    DimensionGrouper,
+    DimensionGroupingPlan,
+    DimensionGroupingSummary,
+    GroupingProgress,
+)
+from .dimension_grouper_worker import DimensionGrouperWorker
 from .main_window_format_check import MainWindow as BaseMainWindow
 from .path_memory import choose_directory
 from .renamer_confirm_dialog import RenamerConfirmDialog
@@ -20,12 +27,15 @@ class MainWindow(BaseMainWindow):
     """Application window with the Renamer available as a safe plan-then-apply action."""
 
     renamer_apply_requested = Signal()
+    dimension_group_apply_requested = Signal()
 
     def __init__(self, project_path: Path, database, database_status, compute_backend) -> None:
         self.renamer_thread: QThread | None = None
         self.renamer_worker: RenamerWorker | None = None
         self.renamer_started_at: float | None = None
         self._renamer_busy_frame = 0
+        self.dimension_group_thread: QThread | None = None
+        self.dimension_group_worker: DimensionGrouperWorker | None = None
         super().__init__(project_path, database, database_status, compute_backend)
 
         self._renamer_busy_timer = QTimer(self)
@@ -38,6 +48,9 @@ class MainWindow(BaseMainWindow):
 
         self.renamer_button = QPushButton("Rename files…", self.centralWidget())
         self.renamer_button.clicked.connect(self.select_renamer_root)
+
+        self.dimension_group_button = QPushButton("Group images by dimensions…", self.centralWidget())
+        self.dimension_group_button.clicked.connect(self.start_dimension_grouping)
 
         self.renamer_activity_label = QLabel("Renamer — processing.", self.centralWidget())
         self.renamer_activity_label.setVisible(False)
@@ -53,11 +66,14 @@ class MainWindow(BaseMainWindow):
             layout.insertWidget(anchor_index + 1, self.renamer_button)
         else:
             layout.addWidget(self.renamer_button)
+        layout.insertWidget(layout.indexOf(self.renamer_button) + 1, self.dimension_group_button)
 
     def _set_module_controls_enabled(self, enabled: bool) -> None:
         super()._set_module_controls_enabled(enabled)
         if hasattr(self, "renamer_button"):
             self.renamer_button.setEnabled(enabled)
+        if hasattr(self, "dimension_group_button"):
+            self.dimension_group_button.setEnabled(enabled)
         if enabled:
             self.renamer_started_at = None
             if hasattr(self, "_renamer_busy_timer"):
@@ -74,6 +90,172 @@ class MainWindow(BaseMainWindow):
         for _dirpath, _dirnames, filenames in os.walk(root):
             total += sum(1 for name in filenames if Path(name).suffix.lower() in supported)
         return total
+
+    def start_dimension_grouping(self) -> None:
+        root = choose_directory(
+            self,
+            "Choose folder for dimension grouping",
+            self.project_path,
+        )
+        if root is None:
+            return
+
+        self._stop_requested = False
+        self._set_module_controls_enabled(False)
+        self.cancel_button.setEnabled(False)
+        self.color_cancel_button.setEnabled(False)
+        if hasattr(self, "dimension_cancel_button"):
+            self.dimension_cancel_button.setEnabled(False)
+
+        self._set_progress(0, 1, "Dimension Grouping")
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Planning…")
+        self.scan_details.setText(
+            f"Dimension Grouping\nFolder: {root}\nInspecting image dimensions without moving files…"
+        )
+        self.statusBar().showMessage("Dimension Grouping is preparing a safe move plan…")
+
+        module = DimensionGrouper(self.database, root)
+        self.dimension_group_thread = QThread(self)
+        self.dimension_group_worker = DimensionGrouperWorker(module)
+        self.dimension_group_worker.moveToThread(self.dimension_group_thread)
+        self.dimension_group_thread.started.connect(self.dimension_group_worker.plan)
+        self.dimension_group_worker.progress.connect(self.on_dimension_group_progress)
+        self.dimension_group_worker.planned.connect(self.on_dimension_group_planned)
+        self.dimension_group_worker.finished.connect(self.on_dimension_group_finished)
+        self.dimension_group_worker.failed.connect(self.on_dimension_group_failed)
+        self.dimension_group_worker.finished.connect(self.dimension_group_worker.deleteLater)
+        self.dimension_group_worker.failed.connect(self.dimension_group_worker.deleteLater)
+        self.dimension_group_worker.finished.connect(self.dimension_group_thread.quit)
+        self.dimension_group_worker.failed.connect(self.dimension_group_thread.quit)
+        self.dimension_group_thread.finished.connect(self._cleanup_dimension_group_thread)
+        self.dimension_group_apply_requested.connect(self.dimension_group_worker.execute)
+        self.dimension_group_thread.start()
+
+    def on_dimension_group_progress(self, progress: GroupingProgress) -> None:
+        if progress.phase == "planning" or progress.total <= 0:
+            self.progress.setRange(0, 0)
+            self.progress.setFormat("Inspecting dimensions…")
+        else:
+            self._set_progress(progress.processed, progress.total, "Dimension Grouping")
+        self.scan_details.setText(
+            f"Dimension Grouping — {progress.phase}\n"
+            f"Processed: {progress.processed:,}"
+            + (f" / {progress.total:,}" if progress.total > 0 else "")
+            + f"\nMoved: {progress.moved:,} | Skipped: {progress.skipped:,} | Errors: {progress.failed:,}"
+            + f"\nCurrent: {progress.current_path or '—'}"
+        )
+
+    def on_dimension_group_planned(self, plan: DimensionGroupingPlan) -> None:
+        if plan.cancelled:
+            self.scan_details.setText("Dimension Grouping cancelled during planning. No files were moved.")
+            self.statusBar().showMessage("Dimension Grouping cancelled.")
+            self._set_module_controls_enabled(True)
+            if self.dimension_group_worker is not None:
+                self.dimension_group_worker.deleteLater()
+            if self.dimension_group_thread is not None:
+                self.dimension_group_thread.quit()
+            return
+
+        if plan.planned_moves == 0:
+            details = (
+                "No files need moving.\n\n"
+                f"Images inspected: {plan.considered:,}\n"
+                f"Unreadable images: {plan.unreadable:,}\n"
+                f"Destination name conflicts: {plan.destination_conflicts:,}"
+            )
+            self.scan_details.setText(f"Dimension Grouping\n\n{details}")
+            self.statusBar().showMessage("Dimension Grouping — no moves required.")
+            QMessageBox.information(self, "Dimension Grouping", details)
+            self._set_module_controls_enabled(True)
+            if self.dimension_group_worker is not None:
+                self.dimension_group_worker.deleteLater()
+            if self.dimension_group_thread is not None:
+                self.dimension_group_thread.quit()
+            return
+
+        dimension_lines = [
+            f"{name}: {count:,}"
+            for name, count in sorted(plan.by_dimension.items(), key=lambda item: (-item[1], item[0]))[:20]
+        ]
+        more = len(plan.by_dimension) - len(dimension_lines)
+        details = (
+            f"Folder: {plan.root}\n\n"
+            f"Supported images inspected: {plan.considered:,}\n"
+            f"Proposed moves: {plan.planned_moves:,}\n"
+            f"Unreadable images: {plan.unreadable:,}\n"
+            f"Destination name conflicts: {plan.destination_conflicts:,}\n\n"
+            "Files will be moved into root-level folders named WIDTHxHEIGHT. "
+            "Existing files will not be overwritten.\n\n"
+            "Images per dimension (top groups):\n"
+            + ("\n".join(dimension_lines) if dimension_lines else "—")
+            + (f"\n… and {more:,} more dimension groups" if more > 0 else "")
+        )
+        answer = QMessageBox.question(
+            self,
+            "Confirm Dimension Grouping",
+            details + "\n\nMove the files now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self.scan_details.setText("Dimension Grouping cancelled before moving any files.")
+            self.statusBar().showMessage("Dimension Grouping cancelled.")
+            self._set_module_controls_enabled(True)
+            if self.dimension_group_worker is not None:
+                self.dimension_group_worker.deleteLater()
+            if self.dimension_group_thread is not None:
+                self.dimension_group_thread.quit()
+            return
+
+        self._set_progress(0, max(1, plan.considered), "Dimension Grouping")
+        self.progress.setFormat("Moving files…")
+        self.scan_details.setText(
+            f"Dimension Grouping\nMoving up to {plan.planned_moves:,} files into dimension folders…"
+        )
+        self.statusBar().showMessage("Dimension Grouping — moving files and synchronizing the database.")
+        self.dimension_group_apply_requested.emit()
+
+    def on_dimension_group_finished(self, summary: DimensionGroupingSummary) -> None:
+        self._refresh_database_status()
+        self._set_module_controls_enabled(True)
+        self._stop_requested = False
+        self._set_idle_progress()
+        title = "Dimension Grouping cancelled." if summary.cancelled else "Dimension Grouping finished."
+        details = (
+            f"{title}\n\n"
+            f"Images inspected: {summary.considered:,}\n"
+            f"Files moved: {summary.moved:,}\n"
+            f"Database locations updated: {summary.database_updated:,}\n"
+            f"Database conflicts reconciled: {summary.database_conflicts_reconciled:,}\n"
+            f"Skipped (existing destination): {summary.skipped_existing:,}\n"
+            f"Unreadable images: {summary.unreadable:,}\n"
+            f"Other errors: {summary.failed:,}\n"
+            f"Elapsed: {self._format_duration(summary.elapsed_seconds)}"
+        )
+        self.scan_details.setText(details)
+        self.statusBar().showMessage(title)
+        QMessageBox.information(self, "Dimension Grouping", details)
+
+    def on_dimension_group_failed(self, message: str) -> None:
+        self._refresh_database_status()
+        self._set_module_controls_enabled(True)
+        self._stop_requested = False
+        self._set_idle_progress()
+        self.scan_details.setText(f"Dimension Grouping could not finish.\nReason: {message}")
+        self.statusBar().showMessage("Dimension Grouping failed.")
+        QMessageBox.critical(self, "Dimension Grouping", message)
+
+    def _cleanup_dimension_group_thread(self) -> None:
+        thread = self.dimension_group_thread
+        self.dimension_group_thread = None
+        self.dimension_group_worker = None
+        try:
+            self.dimension_group_apply_requested.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        if thread is not None:
+            thread.deleteLater()
 
     def _refresh_renamer_busy_indicator(self) -> None:
         """Keep a visible activity indicator while the Renamer worker is alive."""
