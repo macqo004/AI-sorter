@@ -185,7 +185,8 @@ class MainWindow(BaseMainWindow):
             f"Proposed moves: {plan.planned_moves:,}\n"
             f"Unreadable images: {plan.unreadable:,}\n"
             f"Destination name conflicts: {plan.destination_conflicts:,}\n\n"
-            "Files will be moved into root-level folders named WIDTHxHEIGHT. "
+            "Files from the selected folder and its subfolders will be moved into root-level "
+            "folders named WIDTHxHEIGHT; the original subfolder placement will not be preserved. "
             "Existing files will not be overwritten.\n\n"
             "Images per dimension (top groups):\n"
             + ("\n".join(dimension_lines) if dimension_lines else "—")
