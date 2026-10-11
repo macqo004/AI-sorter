@@ -22,6 +22,7 @@ ai-sorter-alldup-full-import = "ai_sorter.alldup_full_import:main"
 ai-sorter-db-cleanup = "ai_sorter.db_cleanup:main"
 ai-sorter-duplicate-review = "ai_sorter.tools.duplicate_review_organizer:main"
 ai-sorter-image-dimensions = "ai_sorter.image_dimensions_cli:main"
+ai-sorter-group-dimensions = "ai_sorter.dimension_grouper_cli:main"
 ai-sorter-simimages-dimension-spy = "ai_sorter.simimages_dimension_spy_cli:main"
 ai-sorter-renamer = "ai_sorter.renamer_cli:main"
 
