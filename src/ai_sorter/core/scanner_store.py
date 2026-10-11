@@ -300,11 +300,11 @@ class ScannerStore:
             ) from exc
 
     def mark_missing_under_root(self, root: Path, execution_id: int) -> int:
-        """Mark active locations not seen during this scan as missing under *root*.
+        """Mark stale ACTIVE identities missing under *root* after a completed scan.
 
-        Every location observed during the current scan already receives this execution_id,
-        so the final reconciliation does not need a large NOT IN comparison against a
-        temporary path table.
+        The per-scan temporary table records the exact (absolute_path, sha512) identity
+        observed at each path. This also repairs old paths that had multiple ACTIVE SHA
+        values: only the identity verified during this scan remains ACTIVE.
         """
         root_text = str(root.resolve()).rstrip("\\/")
         pattern = root_text + "\\%"
